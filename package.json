@@ -1,0 +1,11 @@
+{
+  "name": "maple-plan",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Canadian Financial Literacy & Planning prototype — static site",
+  "scripts": {
+    "deploy": "vercel --prod",
+    "preview": "vercel",
+    "serve": "npx --yes serve ."
+  }
+}

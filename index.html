@@ -1,0 +1,1180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Maple Plan — Canadian Financial Planning & Literacy Platform</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-is@18.3.1/umd/react-is.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
+<script>
+  // Surface any load/runtime error directly on the page so the user isn't staring at white.
+  window.addEventListener('error', function(e){
+    var el = document.getElementById('boot-error') || (function(){
+      var d=document.createElement('div'); d.id='boot-error';
+      d.style.cssText='position:fixed;bottom:0;left:0;right:0;background:#fee2e2;color:#7f1d1d;padding:10px 14px;font:12px/1.4 system-ui;border-top:2px solid #dc2626;z-index:9999;white-space:pre-wrap;max-height:40vh;overflow:auto';
+      document.body && document.body.appendChild(d); return d;
+    })();
+    if (el) el.textContent = 'Load error: ' + (e.message || e.error || e) + (e.filename ? ' @ '+e.filename+':'+e.lineno : '');
+  });
+  window.addEventListener('DOMContentLoaded', function(){
+    setTimeout(function(){
+      var root = document.getElementById('root');
+      if (root && root.children.length === 0) {
+        var miss = [];
+        if (!window.React) miss.push('React');
+        if (!window.ReactDOM) miss.push('ReactDOM');
+        if (!window.Recharts) miss.push('Recharts');
+        if (!window.Babel) miss.push('Babel');
+        if (miss.length) {
+          root.innerHTML = '<div style="padding:20px;font:14px system-ui;color:#7f1d1d;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;margin:20px">'+
+            '<strong>App failed to load.</strong> Missing libraries: '+miss.join(', ')+'.<br>'+
+            'Check your network connection (this file loads libraries from unpkg.com over HTTPS), '+
+            'then refresh. If you opened the file directly via file:// and your browser blocks the CDN, '+
+            'try Chrome or Edge.</div>';
+        }
+      }
+    }, 4000);
+  });
+</script>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+  .pulse-dot { animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  .scroll-shadow { box-shadow: inset 0 -8px 6px -6px rgba(0,0,0,.08); }
+  details > summary { list-style: none; cursor: pointer; }
+  details > summary::-webkit-details-marker { display: none; }
+  .citation { font-variant: small-caps; letter-spacing: .03em; }
+</style>
+</head>
+<body class="bg-slate-50 text-slate-900">
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+const { useState, useMemo, useEffect, useRef } = React;
+const { LineChart, Line, BarChart, Bar, AreaChart, Area, XAxis, YAxis, CartesianGrid,
+        Tooltip, Legend, ResponsiveContainer, ReferenceLine, PieChart, Pie, Cell } = Recharts;
+
+// ============================================================
+// CANADIAN REFERENCE DATA — 2026
+// Source: Mined from user's spreadsheets (Calm Money Coach: rrsp_calculator_v4.1final.xlsx,
+// widows_penalty_calculator_v3_2026.xlsx, retirement_calculator_ontrack.xlsx) which cite CRA
+// and Service Canada. Verify with original sources before relying for any real decision.
+// ============================================================
+
+const REF_2026 = {
+  federalBPA: 16452,
+  rrspDollarLimit: 33810,        // 18% of prior-year earned income, max
+  tfsaAnnualLimit: 7000,
+  tfsaCumulativeFromAge18: 109000,
+  fhsaAnnualLimit: 8000,
+  fhsaLifetimeLimit: 40000,
+  oasClawbackThreshold: 95323,   // OAS recovery tax (15% above)
+  oasMonthlyMax65to74: 742.31,   // Jan-Mar 2026
+  oasMonthlyMax75plus: 816.54,
+  cppMonthlyMaxAt65: 1507.65,    // Jan 2026
+  cppDeathBenefit: 2500,
+  cppYMPE: 74600,
+  cppYAMPE: 81200,               // 2nd ceiling
+  capGainsInclusion: 0.50,       // 66.7% proposal cancelled Mar 2025
+  gisMaxSingleMonthly: 1108.74,
+  gisIncomeCutoffSingle: 22488,
+  cppReductionPer_yrEarly: 0.072,  // 7.2%/yr if before 65 (0.6%/mo)
+  cppIncreasePer_yrLate: 0.084,    // 8.4%/yr if after 65 (0.7%/mo)
+  oasIncreasePer_yrLate: 0.072,    // 7.2%/yr if after 65 (0.6%/mo)
+  inflationAssumed: 0.025,
+  returnConservative: 0.05,
+  returnModerate: 0.06,
+  returnAggressive: 0.07,
+};
+
+// 2026 combined marginal rates by province for ordinary income (decimal)
+const TAX_BRACKETS_ORDINARY = {
+  Ontario:        [[58523,0.1905],[94907,0.2965],[117045,0.3148],[150000,0.4341],[181440,0.4497],[220000,0.4826],[258482,0.4982],[Infinity,0.5353]],
+  "British Columbia":[[58523,0.212],[94907,0.282],[117045,0.310],[150000,0.3829],[181440,0.407],[220000,0.4609],[258482,0.498],[Infinity,0.535]],
+  Alberta:        [[58523,0.250],[94907,0.305],[117045,0.305],[150000,0.360],[181440,0.380],[220000,0.4229],[258482,0.4329],[Infinity,0.480]],
+  Saskatchewan:   [[58523,0.255],[94907,0.330],[117045,0.330],[150000,0.385],[181440,0.405],[220000,0.4379],[258482,0.4379],[Infinity,0.475]],
+  Manitoba:       [[58523,0.258],[94907,0.3325],[117045,0.3325],[150000,0.434],[181440,0.434],[220000,0.4669],[258482,0.4754],[Infinity,0.5125]],
+  Quebec:         [[58523,0.2753],[94907,0.3712],[117045,0.3712],[150000,0.4571],[181440,0.4746],[220000,0.5021],[258482,0.5021],[Infinity,0.5331]],
+  "New Brunswick":[[58523,0.2382],[94907,0.345],[117045,0.345],[150000,0.420],[181440,0.420],[220000,0.4529],[258482,0.4879],[Infinity,0.525]],
+  "Nova Scotia":  [[58523,0.2379],[94907,0.3545],[117045,0.3545],[150000,0.435],[181440,0.435],[220000,0.4679],[258482,0.5029],[Infinity,0.540]],
+  PEI:            [[58523,0.238],[94907,0.3413],[117045,0.3413],[150000,0.430],[181440,0.430],[220000,0.4629],[258482,0.4868],[Infinity,0.520]],
+  "Newfoundland & Labrador":[[58523,0.235],[94907,0.350],[117045,0.350],[150000,0.418],[181440,0.438],[220000,0.4709],[258482,0.528],[Infinity,0.548]],
+  "Northwest Territories":[[58523,0.2005],[94907,0.291],[117045,0.291],[150000,0.382],[181440,0.4005],[220000,0.4334],[258482,0.4334],[Infinity,0.4705]],
+  Nunavut:        [[58523,0.190],[94907,0.275],[117045,0.275],[150000,0.350],[181440,0.350],[220000,0.4079],[258482,0.4079],[Infinity,0.445]],
+  Yukon:          [[58523,0.204],[94907,0.295],[117045,0.295],[150000,0.369],[181440,0.369],[220000,0.4222],[258482,0.458],[Infinity,0.480]],
+};
+
+const TAX_BRACKETS_ELIG_DIV = {
+  Ontario:        [[58523,-0.0963],[94907,0.0756],[117045,0.0892],[150000,0.2538],[181440,0.2753],[220000,0.3208],[258482,0.3423],[Infinity,0.3934]],
+  "British Columbia":[[58523,-0.077],[94907,0.0163],[117045,0.0549],[150000,0.1555],[181440,0.1888],[220000,0.2632],[258482,0.3144],[Infinity,0.3654]],
+  Alberta:        [[58523,0.000],[94907,0.0740],[117045,0.0740],[150000,0.1775],[181440,0.2051],[220000,0.2643],[258482,0.2781],[Infinity,0.3431]],
+};
+
+// Capital-gains rates are exactly half the ordinary rates (50% inclusion)
+function capGainsTable(prov){
+  const ord = TAX_BRACKETS_ORDINARY[prov] || TAX_BRACKETS_ORDINARY.Ontario;
+  return ord.map(([t,r])=>[t, r/2]);
+}
+
+// RRIF minimum withdrawal % by age (regulated by Income Tax Act)
+const RRIF_MIN = {
+  65:0.0400,66:0.0417,67:0.0435,68:0.0455,69:0.0476,70:0.0500,71:0.0528,
+  72:0.0540,73:0.0553,74:0.0567,75:0.0582,76:0.0598,77:0.0617,78:0.0636,
+  79:0.0658,80:0.0682,81:0.0708,82:0.0738,83:0.0771,84:0.0808,85:0.0851,
+  86:0.0899,87:0.0955,88:0.1021,89:0.1099,90:0.1192,91:0.1306,92:0.1449,
+  93:0.1634,94:0.1879,95:0.2000
+};
+
+// Withdrawal-rate guidance by retirement age (FIRE / Morningstar conservative)
+const SAFE_WITHDRAWAL = [
+  {age:45, rate:0.025, label:"50-yr horizon, FIRE"},
+  {age:50, rate:0.028, label:"45-yr horizon"},
+  {age:55, rate:0.032, label:"40-yr horizon"},
+  {age:60, rate:0.036, label:"35-yr horizon"},
+  {age:65, rate:0.040, label:"30-yr horizon (traditional 4% rule)"},
+];
+
+// Age-based savings benchmarks (multiple of current income — Fidelity-style, applied to CDN context)
+const AGE_BENCHMARKS = [
+  {age:25,mult:0.5},{age:30,mult:1.0},{age:35,mult:2.0},{age:40,mult:3.0},
+  {age:45,mult:4.0},{age:50,mult:6.0},{age:55,mult:7.0},{age:60,mult:8.0},{age:65,mult:10.0},
+];
+
+// ============================================================
+// CALCULATION HELPERS
+// ============================================================
+function fmt$(n, dp=0){
+  if (n === null || n === undefined || isNaN(n)) return "—";
+  const sign = n<0 ? "-" : "";
+  const v = Math.abs(n);
+  return sign + "$" + v.toLocaleString("en-CA",{maximumFractionDigits:dp, minimumFractionDigits:dp});
+}
+function fmtPct(n, dp=1){
+  if (n===null||n===undefined||isNaN(n)) return "—";
+  return (n*100).toFixed(dp) + "%";
+}
+
+// Compute federal+provincial tax on ordinary income (combined marginal bracket method).
+// These are *combined effective top-of-bracket rates* — exact tax = sum over filled brackets.
+function taxOrdinary(income, prov){
+  const t = TAX_BRACKETS_ORDINARY[prov] || TAX_BRACKETS_ORDINARY.Ontario;
+  let tax = 0, prev = REF_2026.federalBPA; // approximation: BPA reduces taxable
+  const taxable = Math.max(0, income - REF_2026.federalBPA);
+  let remaining = taxable;
+  let bracketStart = 0;
+  for (const [top, rate] of t){
+    const bracketWidth = top - bracketStart;
+    const tax_in_bracket = Math.min(remaining, bracketWidth) * rate;
+    tax += tax_in_bracket;
+    remaining -= bracketWidth;
+    if (remaining <= 0) break;
+    bracketStart = top;
+  }
+  return Math.max(0, tax);
+}
+function marginalRate(income, prov){
+  const t = TAX_BRACKETS_ORDINARY[prov] || TAX_BRACKETS_ORDINARY.Ontario;
+  for (const [top, rate] of t){ if (income < top) return rate; }
+  return t[t.length-1][1];
+}
+
+// CPP estimate: simplified. Real CPP uses earnings history + drop-out. We model:
+// pct of max (0..1) × max benefit at 65, then apply early/late adjustment.
+function cppAnnual(pctOfMax, claimAge){
+  const baseMonthly = REF_2026.cppMonthlyMaxAt65 * Math.max(0, Math.min(1, pctOfMax));
+  let adj = 0;
+  if (claimAge < 65) adj = -REF_2026.cppReductionPer_yrEarly * (65 - claimAge);
+  else if (claimAge > 65) adj = REF_2026.cppIncreasePer_yrLate * (claimAge - 65);
+  return baseMonthly * (1 + adj) * 12;
+}
+// OAS: full at 65 if 40+ yrs in Canada after 18; pro-rated by yrs/40 (min 10 to start).
+// Late-claim bonus up to 70.
+function oasAnnual(yearsInCanada, claimAge, currentAge){
+  const yrs = Math.min(40, Math.max(0, yearsInCanada));
+  if (yrs < 10) return 0;
+  const baseMonthly = (claimAge>=75?REF_2026.oasMonthlyMax75plus:REF_2026.oasMonthlyMax65to74) * (yrs/40);
+  let adj = 0;
+  if (claimAge > 65) adj = REF_2026.oasIncreasePer_yrLate * (claimAge - 65);
+  return baseMonthly * (1 + adj) * 12;
+}
+// OAS clawback (recovery tax): 15% × (net income − threshold)
+function oasClawback(netIncome, oasReceived){
+  const excess = Math.max(0, netIncome - REF_2026.oasClawbackThreshold);
+  return Math.min(oasReceived, excess * 0.15);
+}
+
+// Project a portfolio with annual contribution & return
+function projectPortfolio(start, annualContrib, returnRate, years){
+  const series = []; let bal = start;
+  for (let y=0; y<=years; y++){
+    series.push({year:y, balance: Math.round(bal)});
+    bal = bal * (1+returnRate) + annualContrib;
+  }
+  return series;
+}
+
+// Year-by-year retirement income/withdrawal simulator
+function simulateRetirement(opts){
+  const {currentAge, retireAge, endAge, currentRRSP, currentTFSA, currentNonReg,
+         annualContribRRSP, annualContribTFSA, returnRate, inflation,
+         spending, cppAnnualAmt, oasAnnualAmt, otherPension, cppStartAge, oasStartAge, prov} = opts;
+  let rrsp = currentRRSP, tfsa = currentTFSA, nonReg = currentNonReg;
+  const rows = [];
+  let cumulativeShortfall = 0;
+  for (let age = currentAge; age <= endAge; age++){
+    const yrsFromNow = age - currentAge;
+    const inflFactor = Math.pow(1+inflation, yrsFromNow);
+    const yearSpending = spending * inflFactor;
+    let cppIn = age >= cppStartAge ? cppAnnualAmt * inflFactor : 0;
+    let oasIn = age >= oasStartAge ? oasAnnualAmt * inflFactor : 0;
+    let pensionIn = otherPension * inflFactor;
+    // Accumulation phase
+    if (age < retireAge){
+      rrsp = rrsp*(1+returnRate) + annualContribRRSP;
+      tfsa = tfsa*(1+returnRate) + annualContribTFSA;
+      nonReg = nonReg*(1+returnRate);
+      rows.push({age, phase:"accum", rrsp:Math.round(rrsp), tfsa:Math.round(tfsa), nonReg:Math.round(nonReg),
+                 total:Math.round(rrsp+tfsa+nonReg), gov:0, withdrawal:0, spending:Math.round(yearSpending),
+                 shortfall:0});
+      continue;
+    }
+    // Drawdown phase: government income first, then RRSP/RRIF (taxable), then non-reg, then TFSA
+    const govNet = cppIn + oasIn + pensionIn;
+    let need = yearSpending; // pre-tax spending target
+    let withdrawal = 0;
+    // Apply RRIF minimum if applicable
+    let rrifMin = 0;
+    if (age >= 72 && rrsp > 0){
+      const minPct = RRIF_MIN[Math.min(95,age)] || 0.2;
+      rrifMin = rrsp * minPct;
+    }
+    const fromGov = Math.min(govNet, need);
+    need -= fromGov;
+    let fromRRSP = Math.max(rrifMin, Math.min(rrsp, need));
+    rrsp -= fromRRSP; need -= fromRRSP * 0.75; // ~25% withholding/tax buffer
+    let fromNonReg = Math.min(nonReg, Math.max(0,need));
+    nonReg -= fromNonReg; need -= fromNonReg;
+    let fromTFSA = Math.min(tfsa, Math.max(0,need));
+    tfsa -= fromTFSA; need -= fromTFSA;
+    withdrawal = fromRRSP + fromNonReg + fromTFSA;
+    if (need > 0) cumulativeShortfall += need;
+    // Apply growth on remaining balances
+    rrsp = Math.max(0,rrsp)*(1+returnRate);
+    tfsa = Math.max(0,tfsa)*(1+returnRate);
+    nonReg = Math.max(0,nonReg)*(1+returnRate);
+    rows.push({age, phase:"retire", rrsp:Math.round(rrsp), tfsa:Math.round(tfsa), nonReg:Math.round(nonReg),
+               total:Math.round(rrsp+tfsa+nonReg), gov:Math.round(govNet), withdrawal:Math.round(withdrawal),
+               spending:Math.round(yearSpending), shortfall:Math.round(Math.max(0,need)), rrifMin:Math.round(rrifMin)});
+  }
+  return {rows, cumulativeShortfall:Math.round(cumulativeShortfall), neverDepletes: cumulativeShortfall===0};
+}
+
+// ============================================================
+// LAYOUT COMPONENTS
+// ============================================================
+function Disclaimer(){
+  return (
+    <div className="bg-amber-50 border-l-4 border-amber-500 text-amber-900 px-4 py-2 text-xs">
+      <strong>Educational use only.</strong> Maple Plan provides general financial literacy and planning support.
+      It is not regulated financial, investment, tax, legal, or insurance advice. Verify all figures with the
+      Canada Revenue Agency, Service Canada, or a licensed professional before acting.
+    </div>
+  );
+}
+
+function Brand(){
+  return (
+    <div className="flex items-center gap-2">
+      <div className="w-9 h-9 rounded-lg bg-red-600 text-white grid place-items-center font-bold">🍁</div>
+      <div>
+        <div className="font-bold text-lg leading-tight">Maple Plan</div>
+        <div className="text-xs text-slate-500 leading-tight">Canadian Financial Literacy & Planning</div>
+      </div>
+    </div>
+  );
+}
+
+function Tab({label, icon, active, onClick}){
+  return (
+    <button onClick={onClick}
+      className={"flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition " +
+        (active ? "bg-red-600 text-white shadow" : "text-slate-700 hover:bg-slate-200")}>
+      <span aria-hidden>{icon}</span>{label}
+    </button>
+  );
+}
+
+function Card({title, children, right, className=""}){
+  return (
+    <div className={"bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden " + className}>
+      {(title || right) && (
+        <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
+          <h3 className="font-semibold text-slate-800">{title}</h3>
+          <div>{right}</div>
+        </div>
+      )}
+      <div className="p-4">{children}</div>
+    </div>
+  );
+}
+
+function NumInput({label, value, onChange, prefix="$", step=1000, min=0, max=99999999, help, suffix}){
+  return (
+    <label className="block">
+      <span className="text-xs font-medium text-slate-600">{label}</span>
+      <div className="mt-1 relative">
+        {prefix && <span className="absolute inset-y-0 left-2 grid place-items-center text-slate-400 text-sm">{prefix}</span>}
+        <input type="number" value={value} step={step} min={min} max={max}
+          onChange={e=>onChange(Number(e.target.value)||0)}
+          className={"w-full rounded border-slate-300 border px-2 py-1.5 text-sm focus:ring-red-500 focus:border-red-500 " +
+            (prefix?"pl-6":"")} />
+        {suffix && <span className="absolute inset-y-0 right-2 grid place-items-center text-slate-400 text-xs">{suffix}</span>}
+      </div>
+      {help && <span className="text-[10px] text-slate-400 mt-0.5 block">{help}</span>}
+    </label>
+  );
+}
+function SelectInput({label, value, onChange, options, help}){
+  return (
+    <label className="block">
+      <span className="text-xs font-medium text-slate-600">{label}</span>
+      <select value={value} onChange={e=>onChange(e.target.value)}
+        className="mt-1 w-full rounded border-slate-300 border px-2 py-1.5 text-sm focus:ring-red-500 focus:border-red-500">
+        {options.map(o => <option key={o.value??o} value={o.value??o}>{o.label??o}</option>)}
+      </select>
+      {help && <span className="text-[10px] text-slate-400 mt-0.5 block">{help}</span>}
+    </label>
+  );
+}
+function Stat({label, value, sub, tone="default"}){
+  const toneCls = tone==="good" ? "text-emerald-700 bg-emerald-50" :
+                  tone==="warn" ? "text-amber-700 bg-amber-50" :
+                  tone==="bad"  ? "text-red-700 bg-red-50" : "text-slate-800 bg-slate-50";
+  return (
+    <div className={"rounded-lg px-3 py-2 "+toneCls}>
+      <div className="text-[11px] uppercase tracking-wide opacity-70">{label}</div>
+      <div className="text-xl font-bold leading-tight">{value}</div>
+      {sub && <div className="text-[11px] opacity-70 mt-0.5">{sub}</div>}
+    </div>
+  );
+}
+function Pill({tone="slate",children}){
+  const c = {slate:"bg-slate-100 text-slate-700", red:"bg-red-100 text-red-700",
+             green:"bg-emerald-100 text-emerald-700", amber:"bg-amber-100 text-amber-800",
+             blue:"bg-sky-100 text-sky-800"}[tone];
+  return <span className={"inline-block rounded-full px-2 py-0.5 text-[10px] font-medium "+c}>{children}</span>;
+}
+function SourceTag({src, date, jur, conf="High"}){
+  return (
+    <div className="text-[10px] text-slate-500 mt-2 flex flex-wrap gap-x-3 gap-y-0.5 citation">
+      <span><strong>Source:</strong> {src}</span>
+      <span><strong>As of:</strong> {date}</span>
+      <span><strong>Jurisdiction:</strong> {jur}</span>
+      <span><strong>Confidence:</strong> {conf}</span>
+    </div>
+  );
+}
+
+// ============================================================
+// USER PROFILE (shared state)
+// ============================================================
+function defaultProfile(){
+  return {
+    name:"", age:55, retireAge:65, endAge:95, province:"Ontario",
+    income:90000, spousalIncome:0, dependents:0,
+    monthlyExpenses:5200, emergencyFund:18000,
+    rrsp:280000, tfsa:95000, nonReg:60000, fhsa:0, resp:0,
+    homeValue:780000, mortgageBalance:185000, otherDebt:8000,
+    annualSavingsRRSP:8000, annualSavingsTFSA:7000,
+    cppPctOfMax:0.85, cppStartAge:65, oasStartAge:65, yearsInCanada:35,
+    otherPension:0,
+    return: REF_2026.returnModerate, inflation: REF_2026.inflationAssumed,
+    hasWill:false, hasPOA:false, hasInsurance:true,
+  };
+}
+
+// ============================================================
+// MODULES
+// ============================================================
+function Dashboard({p, setView}){
+  const assets = p.rrsp + p.tfsa + p.nonReg + p.fhsa + p.resp + p.homeValue + p.emergencyFund;
+  const liab = p.mortgageBalance + p.otherDebt;
+  const netWorth = assets - liab;
+  const liquidInvest = p.rrsp + p.tfsa + p.nonReg + p.fhsa;
+  const monthlyIncome = p.income/12 + p.spousalIncome/12;
+  const cashflow = monthlyIncome - p.monthlyExpenses;
+  const savingsRate = monthlyIncome>0 ? cashflow/monthlyIncome : 0;
+  const efMonths = p.monthlyExpenses>0 ? p.emergencyFund / p.monthlyExpenses : 0;
+  const debtToIncome = (p.income+p.spousalIncome)>0 ? liab/(p.income+p.spousalIncome) : 0;
+  const benchmark = AGE_BENCHMARKS.reduce((b,x)=> Math.abs(x.age-p.age)<Math.abs(b.age-p.age)?x:b, AGE_BENCHMARKS[0]);
+  const benchmarkTarget = benchmark.mult * (p.income+p.spousalIncome);
+  const onTrack = liquidInvest / benchmarkTarget;
+
+  // Wellness score (0-100)
+  const score =
+    Math.max(0,Math.min(20, savingsRate/0.20 * 20)) +
+    Math.max(0,Math.min(15, Math.min(efMonths,6)/6 * 15)) +
+    Math.max(0,Math.min(25, Math.min(onTrack,1.25)/1.25 * 25)) +
+    Math.max(0,Math.min(15, (1-Math.min(debtToIncome,1)) * 15)) +
+    (p.hasWill?5:0) + (p.hasPOA?5:0) + (p.hasInsurance?10:0) +
+    (p.tfsa>=REF_2026.tfsaAnnualLimit?5:0);
+  const tone = score>=75?"good":score>=50?"warn":"bad";
+
+  const allocData = [
+    {name:"RRSP", value:p.rrsp, color:"#dc2626"},
+    {name:"TFSA", value:p.tfsa, color:"#0891b2"},
+    {name:"FHSA", value:p.fhsa, color:"#7c3aed"},
+    {name:"Non-Reg", value:p.nonReg, color:"#65a30d"},
+    {name:"RESP", value:p.resp, color:"#ea580c"},
+    {name:"Home Equity", value:Math.max(0,p.homeValue-p.mortgageBalance), color:"#475569"},
+  ].filter(d => d.value>0);
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <Stat label="Net Worth" value={fmt$(netWorth)} sub={`Assets ${fmt$(assets,0)} − Debt ${fmt$(liab,0)}`} tone="default"/>
+        <Stat label="Monthly Cash Flow" value={fmt$(cashflow)} sub={`Savings rate ${fmtPct(savingsRate)}`} tone={cashflow>=0?"good":"bad"}/>
+        <Stat label="Emergency Fund" value={efMonths.toFixed(1)+" mo"} sub="Target: 3–6 months" tone={efMonths>=3?"good":efMonths>=1?"warn":"bad"}/>
+        <Stat label="Wellness Score" value={Math.round(score)+"/100"} sub={tone==="good"?"On track":tone==="warn"?"Building":"Needs work"} tone={tone}/>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <Card title="Asset Allocation" className="lg:col-span-2">
+          <div className="h-64">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie data={allocData} dataKey="value" nameKey="name" cx="40%" cy="50%" outerRadius={90} label={d=>d.name}>
+                  {allocData.map((e,i)=> <Cell key={i} fill={e.color}/>)}
+                </Pie>
+                <Tooltip formatter={(v)=>fmt$(v)}/>
+                <Legend/>
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+          <SourceTag src="User entries on Profile" date="2026" jur="—" conf="High"/>
+        </Card>
+
+        <Card title="Age-Based Benchmark">
+          <div className="text-sm text-slate-600">At age <strong>{p.age}</strong>, target investment savings is roughly
+            <strong> {benchmark.mult}× </strong> household income.</div>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <Stat label="Target" value={fmt$(benchmarkTarget)} tone="default"/>
+            <Stat label="Where you are" value={fmt$(liquidInvest)} tone={onTrack>=1?"good":onTrack>=0.75?"warn":"bad"}/>
+          </div>
+          <div className="mt-3 text-xs text-slate-500">
+            On track ratio: <strong>{(onTrack*100).toFixed(0)}%</strong>
+          </div>
+          <SourceTag src="Mined from retirement_calculator_ontrack.xlsx (age-based multiples)" date="2026" jur="Canada" conf="Medium"/>
+        </Card>
+      </div>
+
+      <Card title="Quick actions">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+          <button onClick={()=>setView("health")} className="text-left p-3 rounded border border-slate-200 hover:bg-slate-50">
+            <div className="font-medium text-sm">Run Health Assessment</div>
+            <div className="text-xs text-slate-500">10-question scoring</div>
+          </button>
+          <button onClick={()=>setView("retire")} className="text-left p-3 rounded border border-slate-200 hover:bg-slate-50">
+            <div className="font-medium text-sm">Model retirement income</div>
+            <div className="text-xs text-slate-500">CPP, OAS, GIS, RRSP/RRIF</div>
+          </button>
+          <button onClick={()=>setView("tax")} className="text-left p-3 rounded border border-slate-200 hover:bg-slate-50">
+            <div className="font-medium text-sm">Estimate 2026 tax</div>
+            <div className="text-xs text-slate-500">Federal + provincial</div>
+          </button>
+          <button onClick={()=>setView("coach")} className="text-left p-3 rounded border border-slate-200 hover:bg-slate-50">
+            <div className="font-medium text-sm">Ask the AI Coach</div>
+            <div className="text-xs text-slate-500">Plain-language guidance</div>
+          </button>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+function HealthAssessment({p, setP}){
+  const checks = [
+    {ok: (p.emergencyFund / (p.monthlyExpenses||1)) >= 3,
+     label:"Emergency fund covers 3+ months of expenses",
+     action:"Open a high-interest savings account and automate weekly transfers until you reach 3 months of essential expenses."},
+    {ok: p.monthlyExpenses < (p.income/12 + p.spousalIncome/12) * 0.8,
+     label:"Monthly expenses < 80% of household income",
+     action:"Review subscriptions, housing, and discretionary categories. The 50/30/20 rule is a useful starting frame."},
+    {ok: p.tfsa > 0 || p.rrsp > 0,
+     label:"Using at least one registered account (TFSA/RRSP/FHSA)",
+     action:"TFSA is the default for most Canadians; RRSP makes sense above the ~$58K bracket; FHSA if you may buy a first home."},
+    {ok: p.otherDebt < p.income * 0.20,
+     label:"Non-mortgage debt < 20% of annual income",
+     action:"Prioritize high-interest debt (credit card > LOC). Avalanche (highest rate first) usually wins mathematically."},
+    {ok: p.mortgageBalance < p.homeValue * 0.80,
+     label:"Mortgage < 80% loan-to-value on primary residence",
+     action:"At <80% LTV you avoid CMHC default insurance for renewals and have refinancing flexibility."},
+    {ok: p.hasWill,
+     label:"Have a current will",
+     action:"Without a will, the province's intestacy rules decide. Update after marriage, divorce, kids, or major asset changes."},
+    {ok: p.hasPOA,
+     label:"Have powers of attorney (property & personal care)",
+     action:"In every province, two separate POAs are recommended: one for finances, one for healthcare decisions."},
+    {ok: p.hasInsurance,
+     label:"Life/disability/critical-illness insurance reviewed in last 3 years",
+     action:"If anyone depends on your income, term life is usually the cheapest baseline; disability is the most under-bought."},
+    {ok: p.cppPctOfMax >= 0.6,
+     label:"On track for meaningful CPP (60%+ of max projected)",
+     action:"Check your Service Canada Statement of Contributions to see your actual CPP entitlement."},
+    {ok: (p.rrsp + p.tfsa + p.nonReg) >= (p.income+p.spousalIncome) * 2,
+     label:"Investment savings ≥ 2× household income",
+     action:"Useful mid-career benchmark. Adjust target by age — see Dashboard age-based benchmarks."},
+  ];
+  const passed = checks.filter(c=>c.ok).length;
+  return (
+    <div className="space-y-4">
+      <Card title={"Financial Wellness — "+passed+" of 10 indicators on track"}>
+        <ul className="divide-y divide-slate-100">
+          {checks.map((c,i)=> (
+            <li key={i} className="py-2 flex items-start gap-3">
+              <span className={"mt-0.5 inline-flex w-5 h-5 rounded-full grid place-items-center text-xs font-bold " +
+                (c.ok ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700")}>{c.ok?"✓":"!"}</span>
+              <div className="flex-1">
+                <div className="text-sm font-medium">{c.label}</div>
+                {!c.ok && <div className="text-xs text-slate-500 mt-0.5">{c.action}</div>}
+              </div>
+            </li>
+          ))}
+        </ul>
+        <SourceTag src="Composite from FCAC Financial Wellness indicators + Calm Money Coach planner" date="2026" jur="Canada" conf="Medium"/>
+      </Card>
+
+      <Card title="Estate-readiness quick toggles">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={p.hasWill} onChange={e=>setP({...p,hasWill:e.target.checked})}/>
+            I have a current, signed will
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={p.hasPOA} onChange={e=>setP({...p,hasPOA:e.target.checked})}/>
+            I have powers of attorney
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={p.hasInsurance} onChange={e=>setP({...p,hasInsurance:e.target.checked})}/>
+            Life/disability insurance reviewed recently
+          </label>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+function ProfilePanel({p, setP, compact=false}){
+  const set = (k)=>(v)=>setP({...p,[k]:v});
+  return (
+    <Card title="Your profile">
+      <div className={"grid gap-3 " + (compact?"grid-cols-2 md:grid-cols-4":"grid-cols-2 md:grid-cols-3")}>
+        <NumInput label="Current age" value={p.age} onChange={set("age")} prefix="" step={1} suffix="yrs"/>
+        <NumInput label="Retirement age" value={p.retireAge} onChange={set("retireAge")} prefix="" step={1} suffix="yrs"/>
+        <NumInput label="Plan to age" value={p.endAge} onChange={set("endAge")} prefix="" step={1} suffix="yrs"/>
+        <SelectInput label="Province" value={p.province} onChange={set("province")}
+          options={Object.keys(TAX_BRACKETS_ORDINARY).map(k=>({value:k,label:k}))}/>
+        <NumInput label="Your gross income" value={p.income} onChange={set("income")}/>
+        <NumInput label="Spouse income" value={p.spousalIncome} onChange={set("spousalIncome")}/>
+        <NumInput label="Monthly expenses" value={p.monthlyExpenses} onChange={set("monthlyExpenses")} step={100}/>
+        <NumInput label="Emergency fund" value={p.emergencyFund} onChange={set("emergencyFund")}/>
+        <NumInput label="RRSP balance" value={p.rrsp} onChange={set("rrsp")}/>
+        <NumInput label="TFSA balance" value={p.tfsa} onChange={set("tfsa")}/>
+        <NumInput label="FHSA balance" value={p.fhsa} onChange={set("fhsa")}/>
+        <NumInput label="Non-registered" value={p.nonReg} onChange={set("nonReg")}/>
+        <NumInput label="RESP balance" value={p.resp} onChange={set("resp")}/>
+        <NumInput label="Home value" value={p.homeValue} onChange={set("homeValue")}/>
+        <NumInput label="Mortgage balance" value={p.mortgageBalance} onChange={set("mortgageBalance")}/>
+        <NumInput label="Other debt" value={p.otherDebt} onChange={set("otherDebt")}/>
+        <NumInput label="Annual RRSP contribution" value={p.annualSavingsRRSP} onChange={set("annualSavingsRRSP")}/>
+        <NumInput label="Annual TFSA contribution" value={p.annualSavingsTFSA} onChange={set("annualSavingsTFSA")}/>
+        <NumInput label="Other pension (annual)" value={p.otherPension} onChange={set("otherPension")}/>
+      </div>
+    </Card>
+  );
+}
+
+function RetirementEngine({p, setP}){
+  const set = (k)=>(v)=>setP({...p,[k]:v});
+  const cppAnnualAmt = useMemo(()=> cppAnnual(p.cppPctOfMax, p.cppStartAge), [p.cppPctOfMax,p.cppStartAge]);
+  const oasAnnualAmt = useMemo(()=> oasAnnual(p.yearsInCanada, p.oasStartAge, p.age), [p.yearsInCanada,p.oasStartAge,p.age]);
+
+  const sim = useMemo(()=> simulateRetirement({
+    currentAge:p.age, retireAge:p.retireAge, endAge:p.endAge,
+    currentRRSP:p.rrsp, currentTFSA:p.tfsa, currentNonReg:p.nonReg,
+    annualContribRRSP:p.annualSavingsRRSP, annualContribTFSA:p.annualSavingsTFSA,
+    returnRate:p.return, inflation:p.inflation,
+    spending:p.monthlyExpenses*12,
+    cppAnnualAmt, oasAnnualAmt, otherPension:p.otherPension,
+    cppStartAge:p.cppStartAge, oasStartAge:p.oasStartAge, prov:p.province,
+  }), [p, cppAnnualAmt, oasAnnualAmt]);
+
+  // Sensitivity: portfolio at retirement at 5%, 6%, 7%
+  const scenarios = [REF_2026.returnConservative, REF_2026.returnModerate, REF_2026.returnAggressive].map(r=>{
+    const s = simulateRetirement({...{
+      currentAge:p.age, retireAge:p.retireAge, endAge:p.endAge,
+      currentRRSP:p.rrsp, currentTFSA:p.tfsa, currentNonReg:p.nonReg,
+      annualContribRRSP:p.annualSavingsRRSP, annualContribTFSA:p.annualSavingsTFSA,
+      returnRate:r, inflation:p.inflation,
+      spending:p.monthlyExpenses*12,
+      cppAnnualAmt, oasAnnualAmt, otherPension:p.otherPension,
+      cppStartAge:p.cppStartAge, oasStartAge:p.oasStartAge, prov:p.province,
+    }});
+    const atRetire = s.rows.find(x=>x.age===p.retireAge) || s.rows[0];
+    const atEnd = s.rows[s.rows.length-1];
+    return {rate:r, portfolioAtRetire:atRetire.total, portfolioAtEnd:atEnd.total, neverDepletes:s.neverDepletes};
+  });
+
+  const verdict = sim.neverDepletes ? "ON TRACK — never depletes" : `SHORTFALL — cumulative ${fmt$(sim.cumulativeShortfall)}`;
+
+  // CPP timing comparison
+  const cppTiming = [60,65,70].map(a=>({
+    age:a, annual: cppAnnual(p.cppPctOfMax, a), lifetime20: cppAnnual(p.cppPctOfMax, a)*20,
+  }));
+
+  // OAS clawback
+  const grossNetIncomeAtRetire = (cppAnnualAmt + oasAnnualAmt + p.otherPension + (p.monthlyExpenses*12)*0.6);
+  const clawback = oasClawback(grossNetIncomeAtRetire, oasAnnualAmt);
+
+  return (
+    <div className="space-y-4">
+      <Card title="Retirement assumptions">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <NumInput label="CPP % of max" value={Math.round(p.cppPctOfMax*100)} onChange={v=>set("cppPctOfMax")(v/100)} prefix="" step={5} suffix="%" help="Check Service Canada Statement of Contributions"/>
+          <SelectInput label="CPP start age" value={p.cppStartAge} onChange={v=>set("cppStartAge")(Number(v))}
+            options={[60,61,62,63,64,65,66,67,68,69,70].map(a=>({value:a,label:String(a)}))}/>
+          <NumInput label="Years in Canada (after 18)" value={p.yearsInCanada} onChange={set("yearsInCanada")} prefix="" step={1}/>
+          <SelectInput label="OAS start age" value={p.oasStartAge} onChange={v=>set("oasStartAge")(Number(v))}
+            options={[65,66,67,68,69,70].map(a=>({value:a,label:String(a)}))}/>
+          <NumInput label="Expected return" value={Math.round(p.return*1000)/10} onChange={v=>set("return")(v/100)} prefix="" step={0.5} suffix="%/yr"/>
+          <NumInput label="Inflation" value={Math.round(p.inflation*1000)/10} onChange={v=>set("inflation")(v/100)} prefix="" step={0.25} suffix="%/yr"/>
+        </div>
+      </Card>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <Stat label="CPP @ start age" value={fmt$(cppAnnualAmt)} sub={`Monthly: ${fmt$(cppAnnualAmt/12)}`}/>
+        <Stat label="OAS @ start age" value={fmt$(oasAnnualAmt)} sub={`Monthly: ${fmt$(oasAnnualAmt/12)}`}/>
+        <Stat label="Est. OAS clawback" value={fmt$(clawback)} sub={`Threshold: ${fmt$(REF_2026.oasClawbackThreshold)}`} tone={clawback>0?"warn":"good"}/>
+        <Stat label="Verdict" value={sim.neverDepletes?"✓ On track":"⚠ Shortfall"} sub={verdict} tone={sim.neverDepletes?"good":"bad"}/>
+      </div>
+
+      <Card title="Portfolio projection by year (real $)">
+        <div className="h-72">
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={sim.rows}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="age" />
+              <YAxis tickFormatter={v=>"$"+(v/1000).toFixed(0)+"K"} />
+              <Tooltip formatter={(v)=>fmt$(v)}/>
+              <Legend/>
+              <Area type="monotone" dataKey="rrsp" stackId="1" stroke="#dc2626" fill="#fecaca" name="RRSP/RRIF"/>
+              <Area type="monotone" dataKey="nonReg" stackId="1" stroke="#65a30d" fill="#d9f99d" name="Non-Reg"/>
+              <Area type="monotone" dataKey="tfsa" stackId="1" stroke="#0891b2" fill="#a5f3fc" name="TFSA"/>
+              <ReferenceLine x={p.retireAge} stroke="#475569" strokeDasharray="3 3" label={{value:"Retire",position:"top",fill:"#475569",fontSize:11}}/>
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+        <SourceTag src="Withdrawal sequencing logic mined from Calm Money Coach early-retirement workbook" date="2026" jur="Canada" conf="Medium"/>
+      </Card>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <Card title="Scenarios — return sensitivity">
+          <table className="w-full text-sm">
+            <thead className="text-xs text-slate-500"><tr><th className="text-left py-1">Return</th><th className="text-right">@ Retire</th><th className="text-right">@ Plan end</th><th className="text-right">Depletes?</th></tr></thead>
+            <tbody>
+              {scenarios.map((s,i)=>(
+                <tr key={i} className="border-t border-slate-100">
+                  <td className="py-1.5">{fmtPct(s.rate)}</td>
+                  <td className="text-right">{fmt$(s.portfolioAtRetire)}</td>
+                  <td className="text-right">{fmt$(s.portfolioAtEnd)}</td>
+                  <td className="text-right">{s.neverDepletes?<Pill tone="green">No</Pill>:<Pill tone="red">Yes</Pill>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+
+        <Card title="When should I claim CPP?">
+          <table className="w-full text-sm">
+            <thead className="text-xs text-slate-500"><tr><th className="text-left py-1">Start age</th><th className="text-right">Annual</th><th className="text-right">20-yr nominal</th></tr></thead>
+            <tbody>
+              {cppTiming.map(r=>(
+                <tr key={r.age} className="border-t border-slate-100">
+                  <td className="py-1.5">{r.age} {r.age===60&&<Pill tone="red">−36%</Pill>} {r.age===70&&<Pill tone="green">+42%</Pill>}</td>
+                  <td className="text-right">{fmt$(r.annual)}</td>
+                  <td className="text-right">{fmt$(r.lifetime20)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="text-xs text-slate-500 mt-2">Break-even between 65 and 70 is around age <strong>~81</strong>. Health, family longevity, and need for income now should all factor in.</div>
+          <SourceTag src="Service Canada CPP timing rules; 0.6%/mo early, 0.7%/mo late" date="2026" jur="Federal" conf="High"/>
+        </Card>
+      </div>
+
+      <Card title="RRIF minimum withdrawals by age (Income Tax Act schedule)">
+        <div className="grid grid-cols-4 md:grid-cols-8 gap-2 text-xs">
+          {Object.entries(RRIF_MIN).filter(([a])=>Number(a)>=70 && Number(a)<=95 && Number(a)%2===0).map(([a,r])=>(
+            <div key={a} className="bg-slate-50 rounded px-2 py-1">
+              <div className="font-medium">Age {a}</div>
+              <div className="text-slate-600">{(r*100).toFixed(2)}%</div>
+            </div>
+          ))}
+        </div>
+        <SourceTag src="CRA — RRIF minimum withdrawal factors, Income Tax Regulation 7308" date="2026" jur="Federal" conf="High"/>
+      </Card>
+
+      <Card title="Year-by-year drawdown plan">
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead className="bg-slate-100 text-slate-600"><tr>
+              {["Age","Phase","Spend","Gov't","RRIF min","Withdrawal","RRSP","TFSA","Non-Reg","Total","Shortfall"].map(h=><th key={h} className="text-right px-2 py-1.5 first:text-left">{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {sim.rows.filter(r=>r.age>=p.retireAge-1).map(r=>(
+                <tr key={r.age} className="border-t border-slate-100">
+                  <td className="px-2 py-1">{r.age}</td>
+                  <td className="px-2 py-1 text-right"><Pill tone={r.phase==="retire"?"blue":"slate"}>{r.phase}</Pill></td>
+                  <td className="px-2 py-1 text-right">{fmt$(r.spending)}</td>
+                  <td className="px-2 py-1 text-right">{fmt$(r.gov)}</td>
+                  <td className="px-2 py-1 text-right">{fmt$(r.rrifMin||0)}</td>
+                  <td className="px-2 py-1 text-right">{fmt$(r.withdrawal)}</td>
+                  <td className="px-2 py-1 text-right">{fmt$(r.rrsp)}</td>
+                  <td className="px-2 py-1 text-right">{fmt$(r.tfsa)}</td>
+                  <td className="px-2 py-1 text-right">{fmt$(r.nonReg)}</td>
+                  <td className="px-2 py-1 text-right font-semibold">{fmt$(r.total)}</td>
+                  <td className="px-2 py-1 text-right">{r.shortfall>0 ? <span className="text-red-600">{fmt$(r.shortfall)}</span> : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      <Card title="Safe withdrawal rates by retirement age">
+        <table className="w-full text-sm">
+          <thead className="text-xs text-slate-500"><tr><th className="text-left py-1">Retire at</th><th className="text-right">Rate</th><th className="text-left pl-3">Notes</th></tr></thead>
+          <tbody>
+            {SAFE_WITHDRAWAL.map(r=>(
+              <tr key={r.age} className="border-t border-slate-100">
+                <td className="py-1.5">{r.age}</td>
+                <td className="text-right">{fmtPct(r.rate)}</td>
+                <td className="pl-3 text-slate-600">{r.label}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <SourceTag src="Morningstar 2025 recommended safe withdrawal rates; FIRE community" date="2026" jur="Canada" conf="Medium"/>
+      </Card>
+    </div>
+  );
+}
+
+function TaxCentre({p, setP}){
+  const set = (k)=>(v)=>setP({...p,[k]:v});
+  const [income, setIncome] = useState(p.income);
+  const [capGain, setCapGain] = useState(0);
+  const [eligDiv, setEligDiv] = useState(0);
+  const ordTax = taxOrdinary(income, p.province);
+  const margRate = marginalRate(income, p.province);
+  const cgTax = capGain * REF_2026.capGainsInclusion * margRate;
+  const divRate = (TAX_BRACKETS_ELIG_DIV[p.province] || TAX_BRACKETS_ELIG_DIV.Ontario)
+                  .find(([t])=>income<t)?.[1] ?? 0.40;
+  const divTax = eligDiv * Math.max(0,divRate);
+  const totalTax = ordTax + cgTax + divTax;
+  const totalIncome = income + capGain + eligDiv;
+  const afterTax = totalIncome - totalTax;
+  const avgRate = totalIncome>0 ? totalTax/totalIncome : 0;
+
+  // RRSP-deduction impact
+  const [rrspDeduct, setRrspDeduct] = useState(10000);
+  const taxAtIncome = taxOrdinary(income, p.province);
+  const taxAfterRRSP = taxOrdinary(Math.max(0,income-rrspDeduct), p.province);
+  const rrspSaving = taxAtIncome - taxAfterRRSP;
+
+  const brackets = TAX_BRACKETS_ORDINARY[p.province];
+
+  return (
+    <div className="space-y-4">
+      <Card title="2026 tax estimator (federal + provincial combined)">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <SelectInput label="Province" value={p.province} onChange={set("province")}
+            options={Object.keys(TAX_BRACKETS_ORDINARY).map(k=>({value:k,label:k}))}/>
+          <NumInput label="Employment / pension income" value={income} onChange={setIncome}/>
+          <NumInput label="Realized capital gains" value={capGain} onChange={setCapGain}/>
+          <NumInput label="Eligible Canadian dividends" value={eligDiv} onChange={setEligDiv}/>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mt-4">
+          <Stat label="Total income" value={fmt$(totalIncome)}/>
+          <Stat label="Total tax" value={fmt$(totalTax)} tone="warn"/>
+          <Stat label="After-tax" value={fmt$(afterTax)} tone="good"/>
+          <Stat label="Marginal rate" value={fmtPct(margRate)}/>
+          <Stat label="Average rate" value={fmtPct(avgRate)}/>
+        </div>
+        <SourceTag src="2026 combined federal+provincial brackets mined from Calm Money Coach RRSP calculator" date="2026" jur={p.province} conf="High"/>
+      </Card>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <Card title="RRSP contribution — tax reduction">
+          <div className="grid grid-cols-2 gap-3">
+            <NumInput label="RRSP deduction amount" value={rrspDeduct} onChange={setRrspDeduct}/>
+            <Stat label="Estimated tax saving" value={fmt$(rrspSaving)} tone="good" sub={`At ${fmtPct(margRate)} top-bracket rate`}/>
+          </div>
+          <div className="text-xs text-slate-500 mt-3">
+            Rule of thumb: an RRSP contribution at your <strong>marginal rate</strong> defers tax until withdrawal,
+            where it's taxed at your retirement marginal rate. If your retirement rate is lower, you keep the spread.
+          </div>
+          <SourceTag src="CRA — RRSP deduction limit & income reduction" date="2026" jur="Federal" conf="High"/>
+        </Card>
+
+        <Card title="2026 key registered-account limits">
+          <table className="w-full text-sm">
+            <tbody>
+              <tr className="border-b border-slate-100"><td className="py-1.5">RRSP dollar limit</td><td className="text-right font-medium">{fmt$(REF_2026.rrspDollarLimit)}</td></tr>
+              <tr className="border-b border-slate-100"><td className="py-1.5">TFSA annual</td><td className="text-right font-medium">{fmt$(REF_2026.tfsaAnnualLimit)}</td></tr>
+              <tr className="border-b border-slate-100"><td className="py-1.5">TFSA cumulative (since 2009, age 18+)</td><td className="text-right font-medium">{fmt$(REF_2026.tfsaCumulativeFromAge18)}</td></tr>
+              <tr className="border-b border-slate-100"><td className="py-1.5">FHSA annual / lifetime</td><td className="text-right font-medium">{fmt$(REF_2026.fhsaAnnualLimit)} / {fmt$(REF_2026.fhsaLifetimeLimit)}</td></tr>
+              <tr className="border-b border-slate-100"><td className="py-1.5">Federal basic personal amount</td><td className="text-right font-medium">{fmt$(REF_2026.federalBPA)}</td></tr>
+              <tr className="border-b border-slate-100"><td className="py-1.5">OAS clawback threshold</td><td className="text-right font-medium">{fmt$(REF_2026.oasClawbackThreshold)}</td></tr>
+              <tr className="border-b border-slate-100"><td className="py-1.5">CPP YMPE (1st ceiling)</td><td className="text-right font-medium">{fmt$(REF_2026.cppYMPE)}</td></tr>
+              <tr><td className="py-1.5">Capital gains inclusion</td><td className="text-right font-medium">{fmtPct(REF_2026.capGainsInclusion,0)}</td></tr>
+            </tbody>
+          </table>
+          <SourceTag src="CRA, Service Canada — 2026 indexed amounts" date="Jan 2026" jur="Federal" conf="High"/>
+        </Card>
+      </div>
+
+      <Card title="Your marginal-rate ladder by income (Ontario shown for comparison)">
+        <div className="h-56">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={brackets.map(([top,r],i,arr)=>({
+              bracket: top===Infinity? "$258K+" : "≤"+fmt$(top,0).replace("$",""),
+              rate: r*100,
+              prev: i>0 ? arr[i-1][0] : 0
+            }))}>
+              <CartesianGrid strokeDasharray="3 3"/>
+              <XAxis dataKey="bracket" tick={{fontSize:10}}/>
+              <YAxis unit="%" />
+              <Tooltip formatter={(v)=>v.toFixed(2)+"%"}/>
+              <Bar dataKey="rate" fill="#dc2626"/>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+function EstatePanel(){
+  const items = [
+    {t:"Will", body:"Without a current will, intestacy rules of your province distribute your estate — often not how you'd choose. Update after marriage, divorce, kids, major asset changes."},
+    {t:"Beneficiary designations", body:"RRSP, RRIF, TFSA, life insurance, and pension plans pass by beneficiary designation outside the will and outside probate. Review at every life event."},
+    {t:"Powers of attorney", body:"Two are typical: one for property/finances, one for personal care. Different names and statutes by province (e.g., 'Mandate' in Quebec)."},
+    {t:"Probate (Estate Administration Tax)", body:"Ontario charges roughly 1.5% on estate value over $50,000. BC & NS have similar fees. Quebec notarial wills are exempt. Joint ownership and designated beneficiaries can reduce probate exposure but bring their own risks."},
+    {t:"Executor duties", body:"Locating assets, filing the final T1, possibly a T3 trust return, obtaining a clearance certificate from CRA, distributing per the will. Plan to compensate or thank them."},
+    {t:"Spousal rollover", body:"Capital assets generally roll over to a surviving spouse at cost (tax-deferred). RRSP/RRIF can roll to a spouse RRSP/RRIF on death. Children/grandchildren generally cannot defer."},
+    {t:"Widow(er)'s penalty", body:"Survivor moves from two-person tax brackets to single — same income often pays markedly more tax. CPP survivor benefit is capped at a combined CPP maximum. Plan ahead with insurance, drawdown sequencing, and meld-of-incomes scenarios."},
+  ];
+  return (
+    <div className="space-y-4">
+      <Card title="Estate & legacy planning — concepts every Canadian should know">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {items.map((it,i)=>(
+            <div key={i} className="p-3 rounded border border-slate-200 bg-slate-50">
+              <div className="font-semibold text-sm">{it.t}</div>
+              <div className="text-xs text-slate-600 mt-1">{it.body}</div>
+            </div>
+          ))}
+        </div>
+        <SourceTag src="Provincial estate-administration legislation; CRA T1/T3 guides; Calm Money Coach widow's-penalty workbook" date="2026" jur="Provincial" conf="Medium"/>
+      </Card>
+    </div>
+  );
+}
+
+function AICoach({p}){
+  const [msgs, setMsgs] = useState([
+    {role:"assistant", text:"Hi — I'm your educational financial coach. I can explain Canadian concepts in plain English, walk through any calculation in this app step-by-step, and suggest planning ideas. I always cite the rule and source. Pick a suggestion or type a question."}
+  ]);
+  const [input, setInput] = useState("");
+  const ref = useRef(null);
+  useEffect(()=>{ if (ref.current) ref.current.scrollTop = ref.current.scrollHeight; }, [msgs]);
+
+  // Canned, deterministic "RAG" responses keyed to common questions.
+  // In a production build this routes to a server with retrieval over CRA/Service Canada/FCAC corpora.
+  function answer(q){
+    const Q = q.toLowerCase();
+    if (Q.includes("cpp")) return {
+      text: `CPP at 65 (Jan 2026 max) is $${REF_2026.cppMonthlyMaxAt65}/mo (~$${(REF_2026.cppMonthlyMaxAt65*12).toLocaleString()}/yr). Taking it early at 60 reduces it by 7.2% per year (36% total). Taking it late at 70 increases it by 8.4% per year (42% total). Break-even between starting at 65 vs 70 is roughly age 81. Your estimated entitlement depends on your contribution history — check your Statement of Contributions in your My Service Canada Account.`,
+      source: "Service Canada — Canadian Retirement Income Calculator & CPP rules",
+    };
+    if (Q.includes("oas")) return {
+      text: `OAS (Jan-Mar 2026 max age 65-74) is $${REF_2026.oasMonthlyMax65to74}/mo, $${REF_2026.oasMonthlyMax75plus}/mo at 75+. You need 40 years of Canadian residence after age 18 for full OAS; less is pro-rated (minimum 10 years to start). OAS is clawed back at 15% on net income above $${REF_2026.oasClawbackThreshold.toLocaleString()}, fully gone around $155K for ages 65-74.`,
+      source: "Service Canada — OAS pension overview & recovery tax",
+    };
+    if (Q.includes("rrsp") && Q.includes("tfsa")) return {
+      text: "Rule of thumb: TFSA first if your current marginal rate is below your expected retirement rate (and for emergency-fund-adjacent savings). RRSP first if you're in the top brackets today and expect to be in lower brackets in retirement. FHSA combines RRSP-style deduction with TFSA-style tax-free withdrawal — best-of-both if you may buy a first home in the next 15 years.",
+      source: "FCAC — Choosing between TFSA, RRSP, FHSA",
+    };
+    if (Q.includes("rrif")) return {
+      text: `By December 31 of the year you turn 71 you must convert your RRSP to a RRIF (or annuity). RRIF minimum withdrawals start the year after conversion: 5.28% at 71, 5.40% at 72, 6.82% at 80, 8.51% at 85, hitting 20% at 95+. You always control where the money goes — only the minimum withdrawal is forced (and taxable as ordinary income).`,
+      source: "Income Tax Regulations s. 7308; CRA RRIF guide",
+    };
+    if (Q.includes("widow") || Q.includes("survivor")) return {
+      text: "The 'widow's penalty' is the tax shock when a couple drops to one survivor: same household incomes are now taxed in single-person brackets, no pension-income splitting, and CPP survivor benefits are capped at the combined CPP maximum. Mitigation: hold more in TFSA, draw down RRSP earlier in retirement, consider permanent life insurance for liquidity, and use spousal RRSPs while both are alive to even out future incomes.",
+      source: "Calm Money Coach widow's-penalty workbook; CRA — pension income splitting",
+    };
+    if (Q.includes("gis")) return {
+      text: `GIS (Guaranteed Income Supplement) tops up OAS for low-income seniors. Jan-Mar 2026 single max is $${REF_2026.gisMaxSingleMonthly}/mo, fully phased out around $${REF_2026.gisIncomeCutoffSingle.toLocaleString()} of other income. GIS is non-taxable but income-tested — every $1 of RRSP/RRIF withdrawal in early retirement can claw back GIS at 50–75%. For low-income seniors, draw down RRSP *before* age 65 if possible.`,
+      source: "Service Canada — GIS eligibility & rates",
+    };
+    if (Q.includes("tax") && Q.includes("bracket")) {
+      const r = TAX_BRACKETS_ORDINARY[p.province];
+      const top = r[r.length-1][1];
+      return {text: `${p.province} 2026 combined top marginal rate is ${(top*100).toFixed(2)}%. The federal basic personal amount ($${REF_2026.federalBPA.toLocaleString()}) effectively means tax starts above that. Capital gains are taxed at 50% inclusion — your marginal capital-gains rate is half your ordinary rate.`,
+        source: "2026 federal + provincial combined brackets"};
+    }
+    return {text: "I haven't been wired up to that question yet. In the production build, this is a retrieval-augmented call to indexed CRA, Service Canada and FCAC documents with citations. For now, the Retirement Engine and Tax Centre tabs answer most numerical questions interactively.", source:"—"};
+  }
+
+  function send(text){
+    const t = (text??input).trim(); if (!t) return;
+    const a = answer(t);
+    setMsgs(m=>[...m, {role:"user", text:t}, {role:"assistant", text:a.text, source:a.source}]);
+    setInput("");
+  }
+  const suggestions = [
+    "Explain CPP timing.",
+    "Should I use RRSP or TFSA first?",
+    "What is the OAS clawback?",
+    "How do RRIF minimums work?",
+    "What's the widow's penalty?",
+    "Do I qualify for GIS?",
+  ];
+
+  return (
+    <Card title="AI financial coach (educational demo)" right={<Pill tone="amber">Demo — wired to canned RAG responses</Pill>}>
+      <div ref={ref} className="h-72 overflow-y-auto bg-slate-50 rounded p-3 space-y-2 text-sm">
+        {msgs.map((m,i)=>(
+          <div key={i} className={"flex " + (m.role==="user"?"justify-end":"justify-start")}>
+            <div className={"max-w-[80%] rounded-lg px-3 py-2 " + (m.role==="user"?"bg-red-600 text-white":"bg-white border border-slate-200")}>
+              <div>{m.text}</div>
+              {m.source && <div className="text-[10px] mt-1 opacity-70 citation">Source: {m.source}</div>}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {suggestions.map(s=> <button key={s} onClick={()=>send(s)} className="text-xs px-2 py-1 bg-slate-100 hover:bg-slate-200 rounded">{s}</button>)}
+      </div>
+      <div className="mt-2 flex gap-2">
+        <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&send()}
+          placeholder="Ask about RRSP, CPP, OAS, RRIF, tax brackets…"
+          className="flex-1 border border-slate-300 rounded px-3 py-2 text-sm focus:ring-red-500 focus:border-red-500"/>
+        <button onClick={()=>send()} className="bg-red-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-red-700">Send</button>
+      </div>
+      <div className="text-[10px] text-slate-400 mt-2">
+        Production design: server-side RAG over indexed CRA / Service Canada / FCAC / provincial securities / pension authority documents, with effective-date tracking and confidence scoring per chunk. Every assistant turn cites source URL, jurisdiction, and as-of date.
+      </div>
+    </Card>
+  );
+}
+
+function SourcesPanel(){
+  const sources = [
+    {n:"Canada Revenue Agency (CRA)", url:"https://www.canada.ca/en/revenue-agency.html",
+     for:"Federal tax brackets, RRSP/TFSA/FHSA/RESP/RDSP rules, RRIF minimums, capital-gains inclusion, BPA"},
+    {n:"Service Canada", url:"https://www.canada.ca/en/services/benefits.html",
+     for:"CPP rates and timing, OAS pension and recovery tax, GIS, Statement of Contributions"},
+    {n:"Financial Consumer Agency of Canada (FCAC)", url:"https://www.canada.ca/en/financial-consumer-agency.html",
+     for:"Financial literacy framework, account-comparison guidance, debt strategies"},
+    {n:"Statistics Canada", url:"https://www.statcan.gc.ca",
+     for:"Inflation (CPI), wage growth, household debt, life-expectancy tables for longevity modeling"},
+    {n:"OSFI", url:"https://www.osfi-bsif.gc.ca",
+     for:"Bank/insurer regulation, capital and stress-testing context, CDIC coordination"},
+    {n:"Provincial securities regulators (CSA)", url:"https://www.securities-administrators.ca",
+     for:"Investor protection, registration of advisors, MFDA/IIROC successor (CIRO)"},
+    {n:"Provincial pension authorities (e.g., FSRA Ontario, BCFSA)", url:"https://www.fsrao.ca",
+     for:"Workplace pension rules, LIRA/LIF conversions, locking-in rules by jurisdiction"},
+    {n:"Provincial ministries of finance", url:"https://www.canada.ca/en/department-finance.html",
+     for:"Provincial tax credits and bracket structures; budget updates"},
+    {n:"Municipal tax / property assessment (e.g., MPAC Ontario)", url:"https://www.mpac.ca",
+     for:"Property assessment for tax calcs and rental-property analysis"},
+  ];
+  const localSources = [
+    "FinancialPlanner_Enhanced_v5.xlsx — Calm Money Coach dashboard logic & 50/30/20 rules",
+    "Canadian_Early_Retirement_Calculator_COUPLES.xlsx — withdrawal-rate guidance & couple modeling",
+    "lifetime_wealth_calculator_Final.xlsx — provincial tax rate tables & lifetime accumulation",
+    "retirement_calculator_ontrack.xlsx — age-based savings benchmarks",
+    "zz rrsp_calculator_v4.1final.xlsx — 2026 combined federal+provincial brackets, RRIF table, key constants",
+    "zz widows_penalty_calculator_v3_2026.xlsx — survivor income & tax modeling",
+    "Mortgage_Calculator_Please_Download_COPY.xlsx — mortgage amortization logic",
+    "The_Complete_RDSP_Guide_Calm_Money_Coach.docx — RDSP eligibility & grant structure",
+  ];
+  return (
+    <div className="space-y-4">
+      <Card title="Authoritative Canadian sources">
+        <ul className="divide-y divide-slate-100">
+          {sources.map(s=> (
+            <li key={s.n} className="py-2">
+              <div className="flex items-baseline justify-between gap-2 flex-wrap">
+                <div className="font-medium text-sm">{s.n}</div>
+                <a href={s.url} target="_blank" rel="noreferrer" className="text-xs text-sky-700 underline">{s.url}</a>
+              </div>
+              <div className="text-xs text-slate-600 mt-0.5">Used for: {s.for}</div>
+            </li>
+          ))}
+        </ul>
+      </Card>
+      <Card title="This project's reference materials (mined for calculation logic)">
+        <ul className="list-disc pl-5 space-y-1 text-xs text-slate-700">
+          {localSources.map(s=> <li key={s}>{s}</li>)}
+        </ul>
+        <SourceTag src="User-provided spreadsheets in /Financial_docs" date="2026" jur="Canada" conf="High"/>
+      </Card>
+      <Card title="How citations work in this platform">
+        <ol className="list-decimal pl-5 space-y-1 text-sm text-slate-700">
+          <li>Every reference value (tax bracket, OAS amount, RRIF percent) ships with a source, effective date, jurisdiction, and confidence label.</li>
+          <li>The AI Coach attaches a citation to each substantive answer.</li>
+          <li>When government values change (annual indexation, budget updates), the reference table is the single point of update — every module re-reads it.</li>
+          <li>A production deployment indexes the source PDFs/HTML pages and uses retrieval-augmented generation for explanations, with per-chunk effective-date metadata.</li>
+        </ol>
+      </Card>
+    </div>
+  );
+}
+
+function RoadmapPanel(){
+  const built = [
+    "Financial Health Assessment with 10-indicator wellness scoring",
+    "Personal dashboard (net worth, cashflow, savings rate, allocation)",
+    "Retirement Engine: CPP/OAS/GIS modeling, RRSP→RRIF drawdown, year-by-year simulation, return sensitivity, CPP-timing comparison, OAS clawback",
+    "Tax Planning Centre: 2026 federal+provincial brackets all 13 jurisdictions, capital gains, eligible dividends, RRSP-deduction impact",
+    "Estate & Legacy concepts (will, beneficiaries, POA, probate, executor, spousal rollover, widow's penalty)",
+    "AI Coach demo with cited canned responses",
+    "Knowledge sources panel with attribution model",
+  ];
+  const next = [
+    "Real Estate module: full mortgage amortization (from your Mortgage_Calculator workbook), refinance scenarios, rental ROI",
+    "Small Business module: salary-vs-dividend, corporate vs sole prop, holdco / opco structure education",
+    "Benefits Discovery Engine: federal/provincial/municipal program eligibility (CCB, ODSP, OTB, energy rebates, GIS, Allowance)",
+    "RESP optimizer (CESG matching), RDSP optimizer (CDSG/CDSB matching from your RDSP guide)",
+    "Monte Carlo retirement simulation (10,000 paths, sequence-of-returns risk)",
+    "Couples mode toggle + pension-income splitting optimization",
+    "Server-side RAG over indexed CRA/Service Canada/FCAC corpora with vector store",
+    "Auth + persistent user profile (Postgres), audit log of advice given",
+    "Next.js + TypeScript productionization, Tailwind design system, accessibility (WCAG 2.1 AA)",
+    "Deployment: Vercel + managed Postgres + Pinecone/Weaviate for vector store; SOC 2 controls",
+  ];
+  return (
+    <div className="space-y-4">
+      <Card title="Shipped in this prototype">
+        <ul className="list-disc pl-5 space-y-1 text-sm">{built.map(b=> <li key={b}>{b}</li>)}</ul>
+      </Card>
+      <Card title="Next iterations (in priority order)">
+        <ul className="list-disc pl-5 space-y-1 text-sm">{next.map(b=> <li key={b}>{b}</li>)}</ul>
+      </Card>
+      <Card title="Architecture sketch (target production state)">
+        <pre className="text-xs bg-slate-900 text-slate-100 p-3 rounded overflow-x-auto leading-relaxed">{
+`┌─────────────────────────────────────────────────────────────────┐
+│  Next.js 15 / React 19 / TypeScript / Tailwind / shadcn/ui       │
+│  Recharts for visualizations, React Hook Form + Zod for forms    │
+└────────────────────────┬────────────────────────────────────────┘
+                         │ REST + GraphQL
+┌────────────────────────▼────────────────────────────────────────┐
+│  Node.js (Fastify) API                                            │
+│   • Auth (NextAuth + Postgres adapter)                            │
+│   • Profile / plan service (Postgres)                             │
+│   • Calculation engine (pure TS, deterministic, unit-tested)      │
+│   • Reference data service (versioned 2026 / 2027 …)              │
+│   • Benefits eligibility rules engine                             │
+└─────┬───────────────────────┬─────────────────────────────────────┘
+      │ pgvector              │ object store
+┌─────▼────────┐    ┌─────────▼─────────┐
+│  Postgres    │    │  Document corpus   │
+│  + pgvector  │◀──▶│  CRA / Svc Canada  │
+│  (RAG index) │    │  /FCAC/Provincial  │
+└─────┬────────┘    └────────────────────┘
+      │ retrieval
+┌─────▼──────────────────────────────────┐
+│  AI orchestration (Claude API)          │
+│   • RAG: top-k chunks + citations       │
+│   • Tool use: call calc engine for math │
+│   • Source attribution + confidence     │
+└─────────────────────────────────────────┘`
+        }</pre>
+      </Card>
+    </div>
+  );
+}
+
+// ============================================================
+// ROOT APP
+// ============================================================
+function App(){
+  const [profile, setProfile] = useState(()=> {
+    try { const s = localStorage.getItem("mapleplan.profile"); if (s) return {...defaultProfile(), ...JSON.parse(s)}; } catch(e){}
+    return defaultProfile();
+  });
+  useEffect(()=>{ try { localStorage.setItem("mapleplan.profile", JSON.stringify(profile)); } catch(e){} }, [profile]);
+
+  const [view, setView] = useState("dashboard");
+  const tabs = [
+    {id:"dashboard", icon:"📊", label:"Dashboard"},
+    {id:"profile",   icon:"👤", label:"Profile"},
+    {id:"health",    icon:"💚", label:"Health Check"},
+    {id:"retire",    icon:"🏖️", label:"Retirement"},
+    {id:"tax",       icon:"🧾", label:"Tax Centre"},
+    {id:"estate",    icon:"📜", label:"Estate"},
+    {id:"coach",     icon:"💬", label:"AI Coach"},
+    {id:"sources",   icon:"📚", label:"Sources"},
+    {id:"roadmap",   icon:"🛣️", label:"Roadmap"},
+  ];
+
+  return (
+    <div>
+      <Disclaimer/>
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-10">
+        <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
+          <Brand/>
+          <div className="hidden md:flex items-center gap-2 text-xs text-slate-500">
+            <span className="pulse-dot inline-block w-2 h-2 rounded-full bg-emerald-500"></span>
+            2026 reference data loaded
+          </div>
+        </div>
+        <nav className="max-w-7xl mx-auto px-4 pb-2 flex gap-1 overflow-x-auto scroll-shadow">
+          {tabs.map(t=> <Tab key={t.id} {...t} active={view===t.id} onClick={()=>setView(t.id)}/>)}
+        </nav>
+      </header>
+
+      <main className="max-w-7xl mx-auto p-4">
+        {view==="dashboard" && <Dashboard p={profile} setView={setView}/>}
+        {view==="profile"   && <ProfilePanel p={profile} setP={setProfile} compact />}
+        {view==="health"    && <HealthAssessment p={profile} setP={setProfile}/>}
+        {view==="retire"    && <RetirementEngine p={profile} setP={setProfile}/>}
+        {view==="tax"       && <TaxCentre p={profile} setP={setProfile}/>}
+        {view==="estate"    && <EstatePanel/>}
+        {view==="coach"     && <AICoach p={profile}/>}
+        {view==="sources"   && <SourcesPanel/>}
+        {view==="roadmap"   && <RoadmapPanel/>}
+      </main>
+
+      <footer className="max-w-7xl mx-auto px-4 py-6 text-xs text-slate-500 border-t border-slate-200 mt-6">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>Maple Plan prototype • Built {new Date().toLocaleDateString("en-CA")} • Persona focus: pre-retiree / retiree</div>
+          <div>Data effective Jan 2026 • Verify with <a className="underline" href="https://www.canada.ca/en/revenue-agency.html" target="_blank" rel="noreferrer">CRA</a> & <a className="underline" href="https://www.canada.ca/en/services/benefits.html" target="_blank" rel="noreferrer">Service Canada</a></div>
+        </div>
+      </footer>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
