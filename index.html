@@ -1126,6 +1126,9 @@ function ImportPanel({state, refresh}){
   const [result, setResult] = useState(null);
   const [recent, setRecent] = useState([]);
   const [applyingExp, setApplyingExp] = useState(false);
+  const [applyMsg, setApplyMsg] = useState("");
+  const busyRef = useRef(false);     // synchronous guard against double-clicks
+  const applyRef = useRef(false);
 
   useEffect(()=>{
     sb.from("import_runs").select("*").eq("household_id", household.id).order("created_at",{ascending:false}).limit(10).then(({data})=>setRecent(data||[]));
@@ -1150,19 +1153,21 @@ function ImportPanel({state, refresh}){
   }
 
   async function commit(){
-    if (!parsed) return;
+    if (!parsed || busyRef.current) return;
+    busyRef.current = true;
     setBusy(true); setErr(""); setResult(null);
     try {
       const r = await importMonarchTransactions(household.id, file.name, parsed.rows);
       setResult(r);
       await refresh();
     } catch(e){ setErr(e.message||String(e)); }
-    finally{ setBusy(false); }
+    finally{ busyRef.current = false; setBusy(false); }
   }
 
   async function applyExpenseBuckets(){
-    if (!analysis) return;
-    setApplyingExp(true);
+    if (!analysis || applyRef.current) return;
+    applyRef.current = true;
+    setApplyingExp(true); setApplyMsg("");
     try {
       await saveHousehold({...household,
         monthly_expenses_essential: Math.round(analysis.monthly.essential),
@@ -1171,9 +1176,9 @@ function ImportPanel({state, refresh}){
         monthly_expenses: 0,  // clear legacy
       });
       await refresh();
-      alert("Household monthly expense buckets updated from your imported transactions.");
-    } catch(e){ alert("Failed to update household: "+e.message); }
-    finally{ setApplyingExp(false); }
+      setApplyMsg("✓ Household expense buckets updated from your imported transactions.");
+    } catch(e){ setApplyMsg("✗ Update failed: "+(e.message||String(e))); }
+    finally{ applyRef.current = false; setApplyingExp(false); }
   }
 
   async function deleteRun(runId){
@@ -1234,7 +1239,8 @@ function ImportPanel({state, refresh}){
               <button onClick={applyExpenseBuckets} disabled={applyingExp} className="mt-2 w-full text-xs bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white px-3 py-1.5 rounded">
                 {applyingExp ? <Spinner/> : "Apply to Household expense buckets"}
               </button>
-              <div className="text-[10px] text-slate-500 mt-1">Reviews categorization is on the Cash Flow tab. Uncategorized + transfers excluded from buckets.</div>
+              {applyMsg && <div className={"mt-1 text-[11px] rounded px-2 py-1 "+(applyMsg.startsWith("✓") ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-red-50 text-red-700 border border-red-200")}>{applyMsg}</div>}
+              <div className="text-[10px] text-slate-500 mt-1">Uncategorized + transfers excluded from buckets. Edit individual categories on the Household tab.</div>
             </div>
           </div>
 
