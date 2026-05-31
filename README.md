@@ -1,56 +1,33 @@
-# Maple Plan — Vercel deployment
+# Maple Plan
 
-Static single-page app. No build step.
+Educational Canadian financial-literacy and planning platform.
 
-## Three ways to deploy
+**Live:** https://maple-plan-david-martins-projects-42ed4350.vercel.app (alias: https://maple.brightpathtechnology.io)
 
-### 1. Vercel CLI (fastest — 60 seconds, recommended)
+## What it does
 
-From this directory (`maple-plan-deploy/`):
+A single-page React app that helps Canadians model their financial future. Features household/spouse modeling, 12 Canadian account types (RRSP, TFSA, FHSA, DPSP, DCPP, LIRA/LIF, RRIF, RESP, non-registered, etc.), multi-mortgage tracking with full lender details, life-phase expense modeling (working / retired-with-mortgage / retired-without-mortgage), CPP/OAS/GIS projections with timing optimization, RRSP→RRIF drawdown simulation, 2026 federal+provincial tax brackets for all 13 jurisdictions, estate checklist with document uploads, Monarch transaction-CSV import with auto-categorization and cash-flow analysis, and an AI coach (Claude Sonnet 4.6) that sees your profile and answers personalized questions.
 
+## Stack
+
+Single `index.html` (React 18 + Tailwind + Recharts + Supabase JS via CDN). No build step. Backend is Supabase Postgres + Auth + Storage + one Edge Function. AI coach calls Anthropic's Messages API server-side. Hosted on Vercel from this GitHub repo (auto-deploys on push to `main`).
+
+## Deploying
+
+Push to `main` → Vercel builds and deploys in ~60s. That's it.
+
+## Local development
+
+Open `index.html` directly in any modern browser, or:
 ```bash
-npx vercel --prod
+npx serve .
 ```
+The hardcoded Supabase URL in the file means it'll connect to the production database — sign in with a throwaway email if testing destructive changes.
 
-First run will prompt you to log in (browser opens), pick a scope/team, accept defaults for the project. Subsequent runs deploy in place. You'll get a `*.vercel.app` URL printed at the end.
+## Full docs
 
-### 2. Vercel dashboard drag-and-drop (no CLI install)
+See **[HANDOFF.md](./HANDOFF.md)** for architecture, database schema, edge function details, secrets management, code map, known issues, and roadmap.
 
-1. Open https://vercel.com/new
-2. Sign in (GitHub / GitLab / email)
-3. Drag this entire `maple-plan-deploy` folder into the upload area
-4. Click **Deploy**
+## Educational use only
 
-### 3. GitHub-connected continuous deploy
-
-```bash
-cd maple-plan-deploy
-git init && git add . && git commit -m "Initial Maple Plan prototype"
-gh repo create maple-plan --private --source=. --push    # needs GitHub CLI
-```
-
-Then on https://vercel.com/new, import the new GitHub repo. Every push to `main` redeploys automatically.
-
-## Verify locally before deploying
-
-```bash
-npm run serve         # starts a local server on port 3000
-# or
-python3 -m http.server 8000
-```
-
-Open http://localhost:8000 (or :3000) and confirm the app renders.
-
-## Files
-
-| File | Purpose |
-|---|---|
-| `index.html` | The entire app — React + Tailwind + Recharts via CDN |
-| `vercel.json` | Caching, security headers |
-| `package.json` | npm scripts for `deploy`, `preview`, `serve` |
-
-## Notes
-
-- Loads React 18, Recharts 2, Tailwind, Babel-standalone from unpkg.com CDN. First load needs internet.
-- All user inputs persist to `localStorage` only — no backend, no PII leaves the browser.
-- Educational disclaimer banner is rendered on every page.
+Not regulated financial, investment, tax, legal, or insurance advice. Verify with the CRA, Service Canada, or a licensed professional before acting on anything.
