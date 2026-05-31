@@ -108,6 +108,19 @@ const ACCOUNT_TYPES = {
   RESP:{label:"RESP — children's education",color:"#0d9488",help:"Government matches 20% via CESG (max $500/yr per child). Contributions return tax-free; grants + growth taxed in the student's hands on withdrawal."},
 };
 
+const PROPERTY_TYPES = {
+  primary_residence:{label:"Primary residence"}, rental:{label:"Rental property"},
+  second_home:{label:"Second home / cottage"}, other:{label:"Other"}
+};
+const PAYMENT_FREQUENCIES = {
+  monthly:{label:"Monthly", perYear:12},
+  "semi-monthly":{label:"Semi-monthly (1st & 15th)", perYear:24},
+  "bi-weekly":{label:"Bi-weekly", perYear:26},
+  "bi-weekly-accelerated":{label:"Bi-weekly accelerated", perYear:26},
+  weekly:{label:"Weekly", perYear:52},
+  "weekly-accelerated":{label:"Weekly accelerated", perYear:52},
+};
+
 // ==================== helpers ====================
 function fmt$(n,dp=0){if(n==null||isNaN(n))return"—";const s=n<0?"-":"";return s+"$"+Math.abs(n).toLocaleString("en-CA",{maximumFractionDigits:dp,minimumFractionDigits:dp});}
 function fmtPct(n,dp=1){if(n==null||isNaN(n))return"—";return(n*100).toFixed(dp)+"%";}
@@ -142,6 +155,63 @@ function oasClawback(netIncome,oasReceived){
   return Math.min(oasReceived,ex*0.15);
 }
 
+// Mortgage payment → monthly equivalent
+function monthlyMortgagePayment(mortgages){
+  return (mortgages||[]).reduce((sum,m)=>{
+    const freq = PAYMENT_FREQUENCIES[m.payment_frequency] || PAYMENT_FREQUENCIES.monthly;
+    return sum + (Number(m.payment_amount||0) * freq.perYear / 12);
+  }, 0);
+}
+function totalMortgageBalance(mortgages, fallback){
+  if (!mortgages || mortgages.length===0) return Number(fallback||0);
+  return mortgages.reduce((s,m)=>s+Number(m.current_balance||0), 0);
+}
+
+// Year mortgage is fully paid off (age of primary). Returns null if not modelable.
+function mortgageEndAgeForPrimary(mortgages, primaryAgeNow){
+  if (!mortgages || mortgages.length===0) return null;
+  let maxEnd = null;
+  for (const m of mortgages){
+    if (m.amortization_end_date){
+      const end = new Date(m.amortization_end_date);
+      const today = new Date();
+      const yearsAway = (end.getTime() - today.getTime()) / (365.25*24*3600*1000);
+      const ageAtEnd = Math.round(primaryAgeNow + yearsAway);
+      if (maxEnd===null || ageAtEnd>maxEnd) maxEnd = ageAtEnd;
+    } else if (m.maturity_date){
+      // If we only have term maturity, use that as a proxy (conservative).
+      const end = new Date(m.maturity_date);
+      const today = new Date();
+      const yearsAway = (end.getTime() - today.getTime()) / (365.25*24*3600*1000);
+      const ageAtEnd = Math.round(primaryAgeNow + yearsAway);
+      if (maxEnd===null || ageAtEnd>maxEnd) maxEnd = ageAtEnd;
+    }
+  }
+  return maxEnd;
+}
+
+// Compute monthly expenses for a given life phase.
+// phases: 'working' | 'retired_with_mortgage' | 'retired_no_mortgage'
+function monthlyExpensesForPhase(household, mortgages, phase){
+  const ess = Number(household.monthly_expenses_essential||0);
+  const dis = Number(household.monthly_expenses_discretionary||0);
+  const work = Number(household.monthly_expenses_work_related||0);
+  const factor = Number(household.retirement_lifestyle_factor||0.80);
+  const mort = monthlyMortgagePayment(mortgages);
+  // legacy fallback if user hasn't filled in the new fields
+  const legacy = Number(household.monthly_expenses||0);
+  const useLegacy = (ess+dis+work)===0 && legacy>0;
+  if (useLegacy){
+    if (phase==='retired_no_mortgage') return Math.max(0, legacy*factor - mort);
+    if (phase==='retired_with_mortgage') return legacy*factor;
+    return legacy + mort; // working: legacy already represents total, but we add mortgage if it's tracked separately. Backwards-compat caveat.
+  }
+  if (phase==='working') return ess + dis + work + mort;
+  if (phase==='retired_with_mortgage') return (ess + dis)*factor + mort;
+  if (phase==='retired_no_mortgage') return (ess + dis)*factor;
+  return 0;
+}
+
 // ==================== UI atoms ====================
 function Disclaimer(){return(<div className="bg-amber-50 border-l-4 border-amber-500 text-amber-900 px-4 py-2 text-xs"><strong>Educational use only.</strong> Maple Plan provides general financial literacy and planning support. It is not regulated financial, investment, tax, legal, or insurance advice. Verify all figures with the CRA, Service Canada, or a licensed professional before acting.</div>);}
 
@@ -153,7 +223,7 @@ function Card({title,children,right,className=""}){return(<div className={"bg-wh
 
 function NumInput({label,value,onChange,prefix="$",step=1000,suffix,help}){return(<label className="block"><span className="text-xs font-medium text-slate-600">{label}</span><div className="mt-1 relative">{prefix&&<span className="absolute inset-y-0 left-2 grid place-items-center text-slate-400 text-sm">{prefix}</span>}<input type="number" value={value??0} step={step} onChange={e=>onChange(Number(e.target.value)||0)} className={"w-full rounded border-slate-300 border px-2 py-1.5 text-sm focus:ring-red-500 focus:border-red-500 "+(prefix?"pl-6":"")}/>{suffix&&<span className="absolute inset-y-0 right-2 grid place-items-center text-slate-400 text-xs">{suffix}</span>}</div>{help&&<span className="text-[10px] text-slate-400 mt-0.5 block">{help}</span>}</label>);}
 
-function TextInput({label,value,onChange,placeholder,help}){return(<label className="block"><span className="text-xs font-medium text-slate-600">{label}</span><input type="text" value={value??""} onChange={e=>onChange(e.target.value)} placeholder={placeholder} className="mt-1 w-full rounded border-slate-300 border px-2 py-1.5 text-sm focus:ring-red-500 focus:border-red-500"/>{help&&<span className="text-[10px] text-slate-400 mt-0.5 block">{help}</span>}</label>);}
+function TextInput({label,value,onChange,placeholder,help,type="text"}){return(<label className="block"><span className="text-xs font-medium text-slate-600">{label}</span><input type={type} value={value??""} onChange={e=>onChange(e.target.value)} placeholder={placeholder} className="mt-1 w-full rounded border-slate-300 border px-2 py-1.5 text-sm focus:ring-red-500 focus:border-red-500"/>{help&&<span className="text-[10px] text-slate-400 mt-0.5 block">{help}</span>}</label>);}
 
 function SelectInput({label,value,onChange,options,help}){return(<label className="block"><span className="text-xs font-medium text-slate-600">{label}</span><select value={value} onChange={e=>onChange(e.target.value)} className="mt-1 w-full rounded border-slate-300 border px-2 py-1.5 text-sm focus:ring-red-500 focus:border-red-500">{options.map(o=><option key={o.value??o} value={o.value??o}>{o.label??o}</option>)}</select>{help&&<span className="text-[10px] text-slate-400 mt-0.5 block">{help}</span>}</label>);}
 
@@ -186,8 +256,7 @@ function AuthGate({children}){
       if(mode==="signup"){
         const {error}=await sb.auth.signUp({email,password});
         if(error)throw error;
-        setInfo("Check your email to confirm your account, then sign in.");
-        setMode("signin");
+        setInfo("Account created — signing you in.");
       } else {
         const {error}=await sb.auth.signInWithPassword({email,password});
         if(error)throw error;
@@ -248,7 +317,8 @@ async function loadAll(userId){
   const {data:accts}=await sb.from("accounts").select("*").in("person_id",ids).order("type");
   const {data:estate}=await sb.from("estate_checklist").select("*").eq("household_id",hh.id);
   const {data:docs}=await sb.from("documents").select("*").eq("household_id",hh.id).order("uploaded_at",{ascending:false});
-  return {household:hh, persons:ppl, accounts:accts||[], estate:estate||[], documents:docs||[]};
+  const {data:mortgages}=await sb.from("mortgages").select("*").eq("household_id",hh.id).order("created_at");
+  return {household:hh, persons:ppl, accounts:accts||[], estate:estate||[], documents:docs||[], mortgages:mortgages||[]};
 }
 async function saveHousehold(hh){const {id,user_id,created_at,updated_at,...rest}=hh; const {data,error}=await sb.from("households").update(rest).eq("id",id).select().single(); if(error)throw error; return data;}
 async function savePerson(p){const {id,household_id,created_at,...rest}=p; const {data,error}=await sb.from("persons").update(rest).eq("id",id).select().single(); if(error)throw error; return data;}
@@ -257,6 +327,9 @@ async function deletePerson(id){await sb.from("persons").delete().eq("id",id);}
 async function addAccount(pid,type){const {data,error}=await sb.from("accounts").insert({person_id:pid,type,label:ACCOUNT_TYPES[type].label}).select().single(); if(error)throw error; return data;}
 async function saveAccount(a){const {id,person_id,created_at,...rest}=a; const {data,error}=await sb.from("accounts").update(rest).eq("id",id).select().single(); if(error)throw error; return data;}
 async function deleteAccount(id){await sb.from("accounts").delete().eq("id",id);}
+async function addMortgage(hid){const {data,error}=await sb.from("mortgages").insert({household_id:hid, label:"Primary mortgage", property_type:"primary_residence"}).select().single(); if(error)throw error; return data;}
+async function saveMortgage(m){const {id,household_id,created_at,...rest}=m; const {data,error}=await sb.from("mortgages").update(rest).eq("id",id).select().single(); if(error)throw error; return data;}
+async function deleteMortgage(id){await sb.from("mortgages").delete().eq("id",id);}
 async function upsertEstate(hid,key,patch){const {data,error}=await sb.from("estate_checklist").upsert({household_id:hid,item_key:key,...patch},{onConflict:"household_id,item_key"}).select().single(); if(error)throw error; return data;}
 async function uploadDocument(hid,category,file){
   const path=`${hid}/${category}/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g,"_")}`;
@@ -268,7 +341,7 @@ async function uploadDocument(hid,category,file){
 async function deleteDocument(d){await sb.storage.from("documents").remove([d.storage_path]); await sb.from("documents").delete().eq("id",d.id);}
 async function signedUrl(path){const {data,error}=await sb.storage.from("documents").createSignedUrl(path,60); if(error)throw error; return data.signedUrl;}
 
-function householdTotals(persons,accounts,h){
+function householdTotals(persons,accounts,h,mortgages){
   const byType={}; let totalAccounts=0,totalTFSA=0,totalNonReg=0,totalDPSP_DCPP=0;
   for(const a of accounts){
     byType[a.type]=(byType[a.type]||0)+Number(a.balance||0);
@@ -277,22 +350,66 @@ function householdTotals(persons,accounts,h){
     else if(a.type==="NON_REG")totalNonReg+=Number(a.balance||0);
     else if(a.type==="DPSP"||a.type==="DCPP")totalDPSP_DCPP+=Number(a.balance||0);
   }
-  const homeEquity=Math.max(0,Number(h.home_value||0)-Number(h.mortgage_balance||0));
+  const mortgageDebt = totalMortgageBalance(mortgages, h.mortgage_balance);
+  const homeEquity=Math.max(0,Number(h.home_value||0)-mortgageDebt);
   const assets=totalAccounts+Number(h.emergency_fund||0)+Number(h.home_value||0);
-  const debt=Number(h.mortgage_balance||0)+Number(h.other_debt||0);
+  const debt=mortgageDebt+Number(h.other_debt||0);
   const householdIncome=persons.reduce((s,p)=>s+Number(p.income||0),0);
-  return{byType,totalAccounts,totalTFSA,totalNonReg,totalDPSP_DCPP,homeEquity,assets,debt,netWorth:assets-debt,householdIncome};
+  return{byType,totalAccounts,totalTFSA,totalNonReg,totalDPSP_DCPP,homeEquity,assets,debt,netWorth:assets-debt,householdIncome,mortgageDebt};
+}
+
+// ==================== Donut chart with side legend (fixes label bunching) ====================
+function AssetDonut({data}){
+  const total = data.reduce((s,d)=>s+d.value, 0);
+  const renderPctLabel = ({percent, x, y}) => {
+    if (percent < 0.08) return null;
+    return <text x={x} y={y} fill="#fff" textAnchor="middle" dominantBaseline="central" fontSize={11} fontWeight={600}>{(percent*100).toFixed(0)}%</text>;
+  };
+  return (
+    <div className="flex flex-col md:flex-row gap-3 items-center">
+      <div className="w-full md:w-1/2 h-56 relative">
+        <ResponsiveContainer width="100%" height="100%">
+          <PieChart>
+            <Pie data={data} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={50} outerRadius={90} labelLine={false} label={renderPctLabel}>
+              {data.map((e,i)=><Cell key={i} fill={e.color}/>)}
+            </Pie>
+            <Tooltip formatter={(v,n)=>[fmt$(v), n]}/>
+          </PieChart>
+        </ResponsiveContainer>
+        <div className="absolute inset-0 grid place-items-center pointer-events-none">
+          <div className="text-center">
+            <div className="text-[10px] uppercase text-slate-400">Total</div>
+            <div className="font-bold text-slate-700">{fmt$(total)}</div>
+          </div>
+        </div>
+      </div>
+      <ul className="w-full md:w-1/2 space-y-1.5 text-sm">
+        {data.map((d,i)=>{
+          const pct = total>0 ? d.value/total : 0;
+          return (
+            <li key={i} className="flex items-center justify-between gap-2">
+              <span className="flex items-center gap-2 min-w-0">
+                <span className="w-3 h-3 rounded-sm shrink-0" style={{background:d.color}}/>
+                <span className="truncate">{d.name}</span>
+              </span>
+              <span className="text-slate-600 text-xs whitespace-nowrap">{fmt$(d.value)} <span className="text-slate-400">· {(pct*100).toFixed(0)}%</span></span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
 }
 
 // ==================== VIEWS ====================
 function Dashboard({state,setView}){
-  const {household,persons,accounts}=state;
-  const m=householdTotals(persons,accounts,household);
-  const monthlyExp=Number(household.monthly_expenses||0);
+  const {household,persons,accounts,mortgages}=state;
+  const m=householdTotals(persons,accounts,household,mortgages);
+  const monthlyExpensesWorking = monthlyExpensesForPhase(household, mortgages, 'working');
   const monthlyIncome=m.householdIncome/12;
-  const cashflow=monthlyIncome-monthlyExp;
+  const cashflow=monthlyIncome-monthlyExpensesWorking;
   const savingsRate=monthlyIncome>0?cashflow/monthlyIncome:0;
-  const efMonths=monthlyExp>0?Number(household.emergency_fund||0)/monthlyExp:0;
+  const efMonths=monthlyExpensesWorking>0?Number(household.emergency_fund||0)/monthlyExpensesWorking:0;
   const debtToIncome=m.householdIncome>0?m.debt/m.householdIncome:0;
   const primaryAge=persons[0]?.age||55;
   const benchmark=AGE_BENCHMARKS.reduce((b,x)=>Math.abs(x.age-primaryAge)<Math.abs(b.age-primaryAge)?x:b,AGE_BENCHMARKS[0]);
@@ -307,14 +424,16 @@ function Dashboard({state,setView}){
     <div className="space-y-4">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <Stat label="Net Worth" value={fmt$(m.netWorth)} sub={`Assets ${fmt$(m.assets)} − Debt ${fmt$(m.debt)}`}/>
-        <Stat label="Monthly Cash Flow" value={fmt$(cashflow)} sub={`Savings rate ${fmtPct(savingsRate)}`} tone={cashflow>=0?"good":"bad"}/>
-        <Stat label="Emergency Fund" value={efMonths.toFixed(1)+" mo"} sub="Target 3–6 mo" tone={efMonths>=3?"good":efMonths>=1?"warn":"bad"}/>
+        <Stat label="Monthly Cash Flow" value={fmt$(cashflow)} sub={`Income ${fmt$(monthlyIncome)} − Exp ${fmt$(monthlyExpensesWorking)}`} tone={cashflow>=0?"good":"bad"}/>
+        <Stat label="Emergency Fund" value={efMonths.toFixed(1)+" mo"} sub="Target 3–6 mo of expenses" tone={efMonths>=3?"good":efMonths>=1?"warn":"bad"}/>
         <Stat label="Wellness Score" value={Math.round(score)+"/100"} sub={tone==="good"?"On track":tone==="warn"?"Building":"Needs work"} tone={tone}/>
       </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <Card title={"Allocation — "+accounts.length+" account"+(accounts.length===1?"":"s")+", "+persons.length+(persons.length===1?" person":" people")} className="lg:col-span-2">
-          {allocData.length===0?<div className="text-sm text-slate-500 py-12 text-center">No accounts yet. <button onClick={()=>setView("accounts")} className="text-red-600 underline">Add your first account</button>.</div>:
-          <div className="h-64"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={allocData} dataKey="value" nameKey="name" cx="40%" cy="50%" outerRadius={90} label={d=>d.name}>{allocData.map((e,i)=><Cell key={i} fill={e.color}/>)}</Pie><Tooltip formatter={v=>fmt$(v)}/><Legend/></PieChart></ResponsiveContainer></div>}
+        <Card title={"Asset allocation — "+accounts.length+" account"+(accounts.length===1?"":"s")+" · "+persons.length+(persons.length===1?" person":" people")} className="lg:col-span-2">
+          {allocData.length===0
+            ? <div className="text-sm text-slate-500 py-12 text-center">No accounts yet. <button onClick={()=>setView("accounts")} className="text-red-600 underline">Add your first account</button>.</div>
+            : <AssetDonut data={allocData}/>}
         </Card>
         <Card title="Age-based benchmark">
           <div className="text-sm text-slate-600">At age <strong>{primaryAge}</strong>, target ~<strong>{benchmark.mult}×</strong> household income.</div>
@@ -322,14 +441,28 @@ function Dashboard({state,setView}){
           <div className="mt-3 text-xs text-slate-500">On track ratio: <strong>{(onTrack*100).toFixed(0)}%</strong></div>
         </Card>
       </div>
-      {Object.keys(m.byType).length>0&&<Card title="Account composition">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
-          {Object.entries(m.byType).map(([t,v])=>{const T=ACCOUNT_TYPES[t];if(!T)return null;return<div key={t} className="rounded border border-slate-200 p-2"><div className="text-[10px] uppercase text-slate-500">{T.label}</div><div className="font-bold">{fmt$(v)}</div></div>;})}
+
+      {mortgages.length>0 && <Card title={"Mortgages — "+mortgages.length}>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+          {mortgages.map(m=>{
+            const freq = PAYMENT_FREQUENCIES[m.payment_frequency]||PAYMENT_FREQUENCIES.monthly;
+            return <div key={m.id} className="border border-slate-200 rounded p-3 bg-slate-50">
+              <div className="font-medium">{m.label} <Pill tone="slate">{PROPERTY_TYPES[m.property_type]?.label}</Pill></div>
+              <div className="grid grid-cols-2 gap-1 mt-2 text-xs">
+                <div className="text-slate-500">Balance</div><div className="text-right font-medium">{fmt$(m.current_balance)}</div>
+                <div className="text-slate-500">Rate</div><div className="text-right">{((m.rate||0)*100).toFixed(2)}% {m.rate_type}</div>
+                <div className="text-slate-500">Payment</div><div className="text-right">{fmt$(m.payment_amount,2)} {freq.label.toLowerCase()}</div>
+                <div className="text-slate-500">Maturity</div><div className="text-right">{m.maturity_date||"—"}</div>
+                <div className="text-slate-500">Paid off est.</div><div className="text-right">{m.amortization_end_date||"—"}</div>
+              </div>
+            </div>;
+          })}
         </div>
       </Card>}
+
       <Card title="Quick actions">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-          {[["profile","Household & spouse"],["accounts","Add or edit accounts"],["retire","Retirement projection"],["estate","Estate checklist & docs"]].map(([id,t])=>
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+          {[["profile","Household & spouse"],["accounts","Add or edit accounts"],["mortgages","Mortgages"],["retire","Retirement"],["estate","Estate & docs"]].map(([id,t])=>
             <button key={id} onClick={()=>setView(id)} className="text-left p-3 rounded border border-slate-200 hover:bg-slate-50"><div className="font-medium text-sm">{t}</div></button>)}
         </div>
       </Card>
@@ -341,7 +474,7 @@ function HouseholdPanel({state,refresh}){
   const {household,persons}=state;
   const [hh,setHh]=useState(household);
   const [saving,setSaving]=useState(false);
-  useEffect(()=>setHh(household),[household.id, household.updated_at]);
+  useEffect(()=>setHh(household),[household.id]);
   const setF=(k)=>(v)=>setHh({...hh,[k]:v});
   async function save(){setSaving(true); try{await saveHousehold(hh); await refresh();}catch(e){alert("Save failed: "+e.message);} finally{setSaving(false);}}
   async function toggleSpouse(checked){
@@ -354,6 +487,7 @@ function HouseholdPanel({state,refresh}){
       await refresh();
     }catch(e){alert("Spouse toggle failed: "+e.message);}finally{setSaving(false);}
   }
+  const totalWorking = (Number(hh.monthly_expenses_essential||0)+Number(hh.monthly_expenses_discretionary||0)+Number(hh.monthly_expenses_work_related||0));
   return(
     <div className="space-y-4">
       <Card title="Household settings" right={<button onClick={save} disabled={saving} className="bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white text-xs px-3 py-1.5 rounded">{saving?<Spinner/>:"Save household"}</button>}>
@@ -364,11 +498,9 @@ function HouseholdPanel({state,refresh}){
           <NumInput label="Plan to age" value={hh.end_age} onChange={setF("end_age")} prefix="" step={1} suffix="yrs"/>
           <NumInput label="Expected return" value={Math.round((hh.return_rate||0)*1000)/10} onChange={v=>setF("return_rate")(v/100)} prefix="" step={0.5} suffix="%/yr"/>
           <NumInput label="Inflation" value={Math.round((hh.inflation||0)*1000)/10} onChange={v=>setF("inflation")(v/100)} prefix="" step={0.25} suffix="%/yr"/>
-          <NumInput label="Monthly expenses" value={hh.monthly_expenses} onChange={setF("monthly_expenses")} step={100}/>
           <NumInput label="Emergency fund" value={hh.emergency_fund} onChange={setF("emergency_fund")}/>
           <NumInput label="Home value" value={hh.home_value} onChange={setF("home_value")}/>
-          <NumInput label="Mortgage balance" value={hh.mortgage_balance} onChange={setF("mortgage_balance")}/>
-          <NumInput label="Other debt" value={hh.other_debt} onChange={setF("other_debt")}/>
+          <NumInput label="Other debt (non-mortgage)" value={hh.other_debt} onChange={setF("other_debt")}/>
         </div>
         <div className="mt-4 flex items-center gap-3">
           <label className="flex items-center gap-2 text-sm">
@@ -377,6 +509,18 @@ function HouseholdPanel({state,refresh}){
           </label>
         </div>
       </Card>
+
+      <Card title="Monthly expenses — broken into life-phase buckets" right={<button onClick={save} disabled={saving} className="bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white text-xs px-3 py-1.5 rounded">{saving?<Spinner/>:"Save"}</button>}>
+        <div className="text-xs text-slate-600 mb-3">Splitting expenses this way lets the planner show what happens after retirement (work-related expenses drop) and after the mortgage is paid (mortgage payment drops). Mortgage payment is pulled from the Mortgages tab.</div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <NumInput label="Essential / fixed" value={hh.monthly_expenses_essential} onChange={setF("monthly_expenses_essential")} step={50} help="Property tax, utilities, groceries, insurance, transport, healthcare"/>
+          <NumInput label="Discretionary" value={hh.monthly_expenses_discretionary} onChange={setF("monthly_expenses_discretionary")} step={50} help="Dining out, travel, entertainment, gifts, subscriptions"/>
+          <NumInput label="Work-related" value={hh.monthly_expenses_work_related} onChange={setF("monthly_expenses_work_related")} step={50} help="Commute, work clothing, lunches, daycare — drops to ~0 in retirement"/>
+          <NumInput label="Retirement lifestyle factor" value={Math.round((hh.retirement_lifestyle_factor||0.80)*100)} onChange={v=>setF("retirement_lifestyle_factor")(v/100)} prefix="" step={5} suffix="%" help="Multiplier on essential+discretionary in retirement (typically 70–85%)"/>
+        </div>
+        <div className="mt-3 text-xs text-slate-500">Working-years monthly expenses (computed): <strong>{fmt$(totalWorking + monthlyMortgagePayment(state.mortgages))}</strong> · of which mortgage: <strong>{fmt$(monthlyMortgagePayment(state.mortgages),2)}</strong></div>
+      </Card>
+
       {persons.map(p=><PersonPanel key={p.id} person={p} refresh={refresh}/>)}
     </div>
   );
@@ -457,23 +601,95 @@ function AccountRow({acct,onSave,onDelete,saving}){
   );
 }
 
+// ==================== MORTGAGES ====================
+function MortgagesPanel({state, refresh}){
+  const {household, mortgages} = state;
+  const [adding,setAdding]=useState(false);
+  const [savingId,setSavingId]=useState(null);
+  async function add(){setAdding(true); try{await addMortgage(household.id); await refresh();}catch(e){alert(e.message);}finally{setAdding(false);}}
+  async function save(m){setSavingId(m.id); try{await saveMortgage(m); await refresh();}catch(e){alert("Save failed: "+e.message);}finally{setSavingId(null);}}
+  async function remove(m){if(!confirm("Delete "+(m.label||"mortgage")+"?"))return; await deleteMortgage(m.id); await refresh();}
+  const totalBal = totalMortgageBalance(mortgages, 0);
+  const monthlyPay = monthlyMortgagePayment(mortgages);
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <Stat label="Mortgages" value={String(mortgages.length)}/>
+        <Stat label="Total balance" value={fmt$(totalBal)} tone={totalBal>0?"bad":"good"}/>
+        <Stat label="Monthly payment" value={fmt$(monthlyPay,2)}/>
+        <Stat label="Annual payment" value={fmt$(monthlyPay*12,0)}/>
+      </div>
+      <Card title="Your mortgages" right={<button onClick={add} disabled={adding} className="bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white text-sm px-3 py-1.5 rounded">{adding?<Spinner/>:"+ Add mortgage"}</button>}>
+        {mortgages.length===0 && <div className="text-sm text-slate-500">No mortgages tracked yet. Click <em>+ Add mortgage</em> above to enter the details from your lender's statement.</div>}
+        <div className="space-y-4 mt-2">
+          {mortgages.map(m => <MortgageRow key={m.id} mortgage={m} onSave={save} onDelete={remove} saving={savingId===m.id}/>)}
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+function MortgageRow({mortgage, onSave, onDelete, saving}){
+  const [m, setM] = useState(mortgage);
+  useEffect(()=>setM(mortgage),[mortgage.id]);
+  const setF=(k)=>(v)=>setM({...m,[k]:v});
+  const freq = PAYMENT_FREQUENCIES[m.payment_frequency]||PAYMENT_FREQUENCIES.monthly;
+  const monthlyEq = Number(m.payment_amount||0) * freq.perYear / 12;
+  const annualEq = monthlyEq * 12;
+  return (
+    <div className="border border-slate-200 rounded p-3 bg-slate-50">
+      <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
+        <div className="font-semibold text-sm">{m.label||"Mortgage"} <Pill tone="slate">{PROPERTY_TYPES[m.property_type]?.label}</Pill></div>
+        <div className="flex gap-2">
+          <button onClick={()=>onSave(m)} disabled={saving} className="text-xs bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white px-2 py-1 rounded">{saving?<Spinner/>:"Save"}</button>
+          <button onClick={()=>onDelete(m)} className="text-xs bg-white hover:bg-red-50 border border-red-200 text-red-700 px-2 py-1 rounded">Delete</button>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <TextInput label="Label / nickname" value={m.label} onChange={setF("label")} placeholder="Primary mortgage"/>
+        <SelectInput label="Property type" value={m.property_type} onChange={setF("property_type")} options={Object.entries(PROPERTY_TYPES).map(([k,v])=>({value:k,label:v.label}))}/>
+        <TextInput label="Institution" value={m.institution} onChange={setF("institution")} placeholder="e.g. RBC, Tangerine"/>
+        <TextInput label="Account # (optional)" value={m.account_number} onChange={setF("account_number")} placeholder="#1169398"/>
+
+        <NumInput label="Initial balance" value={m.initial_balance} onChange={setF("initial_balance")}/>
+        <NumInput label="Current balance" value={m.current_balance} onChange={setF("current_balance")}/>
+        <NumInput label="Interest rate" value={Math.round((m.rate||0)*10000)/100} onChange={v=>setF("rate")(v/100)} prefix="" step={0.05} suffix="%/yr"/>
+        <SelectInput label="Rate type" value={m.rate_type} onChange={setF("rate_type")} options={[{value:"fixed",label:"Fixed"},{value:"variable",label:"Variable"}]}/>
+
+        <NumInput label="Term (years)" value={m.term_years} onChange={setF("term_years")} prefix="" step={1} suffix="yrs"/>
+        <NumInput label="Amortization (years)" value={m.amortization_years} onChange={setF("amortization_years")} prefix="" step={1} suffix="yrs"/>
+        <SelectInput label="Payment frequency" value={m.payment_frequency} onChange={setF("payment_frequency")} options={Object.entries(PAYMENT_FREQUENCIES).map(([k,v])=>({value:k,label:v.label}))}/>
+        <NumInput label="Payment amount" value={m.payment_amount} onChange={setF("payment_amount")} step={10} help="Per payment, at chosen frequency"/>
+
+        <NumInput label="Payments remaining" value={m.payments_remaining} onChange={setF("payments_remaining")} prefix="" step={1}/>
+        <TextInput label="Next payment date" type="date" value={m.next_payment_date} onChange={setF("next_payment_date")}/>
+        <TextInput label="Term maturity date" type="date" value={m.maturity_date} onChange={setF("maturity_date")} help="When current term ends"/>
+        <TextInput label="Fully paid off (est.)" type="date" value={m.amortization_end_date} onChange={setF("amortization_end_date")} help="When the mortgage is fully amortized"/>
+
+        <NumInput label="Lump-sum prepayment privilege" value={Math.round((m.prepayment_lump_pct||0)*100)} onChange={v=>setF("prepayment_lump_pct")(v/100)} prefix="" step={5} suffix="%/yr"/>
+        <NumInput label="Payment-increase privilege" value={Math.round((m.prepayment_increase_pct||0)*100)} onChange={v=>setF("prepayment_increase_pct")(v/100)} prefix="" step={5} suffix="%"/>
+        <label className="flex items-center gap-2 text-sm mt-5"><input type="checkbox" checked={!!m.double_payment_allowed} onChange={e=>setF("double_payment_allowed")(e.target.checked)}/>Double-payment allowed</label>
+        <NumInput label="Cashback received" value={m.cashback_received} onChange={setF("cashback_received")}/>
+      </div>
+      <TextInput label="Notes" value={m.notes} onChange={setF("notes")} placeholder="e.g. Renewal Apr 2030 — explore 5-yr fixed"/>
+      <div className="mt-2 text-[11px] text-slate-500 grid grid-cols-2 md:grid-cols-4 gap-2">
+        <div>Monthly equivalent: <strong>{fmt$(monthlyEq,2)}</strong></div>
+        <div>Annual: <strong>{fmt$(annualEq,0)}</strong></div>
+        <div>Payments/yr: <strong>{freq.perYear}</strong></div>
+        {m.initial_balance>0 && <div>Paid down: <strong>{fmt$(Number(m.initial_balance||0)-Number(m.current_balance||0))}</strong></div>}
+      </div>
+    </div>
+  );
+}
+
+// ==================== ESTATE ====================
 function EstatePanel({state,refresh}){
   const {household,estate,documents}=state;
   const byKey=Object.fromEntries(estate.map(e=>[e.item_key,e]));
   const [busyKey,setBusyKey]=useState(null);
   const [uploadingKey,setUploadingKey]=useState(null);
-  async function toggle(key,checked){
-    setBusyKey(key);
-    try{await upsertEstate(household.id,key,{is_complete:checked,completed_date:checked?new Date().toISOString().slice(0,10):null}); await refresh();}
-    catch(e){alert(e.message);}finally{setBusyKey(null);}
-  }
-  async function upload(key,file){
-    if(!file)return;
-    if(file.size>25*1024*1024){alert("File too large (max 25 MB).");return;}
-    setUploadingKey(key);
-    try{await uploadDocument(household.id,key,file); await refresh();}
-    catch(e){alert("Upload failed: "+e.message);}finally{setUploadingKey(null);}
-  }
+  async function toggle(key,checked){setBusyKey(key); try{await upsertEstate(household.id,key,{is_complete:checked,completed_date:checked?new Date().toISOString().slice(0,10):null}); await refresh();}catch(e){alert(e.message);}finally{setBusyKey(null);}}
+  async function upload(key,file){if(!file)return; if(file.size>25*1024*1024){alert("File too large (max 25 MB).");return;} setUploadingKey(key); try{await uploadDocument(household.id,key,file); await refresh();}catch(e){alert("Upload failed: "+e.message);}finally{setUploadingKey(null);}}
   async function downloadDoc(d){try{const url=await signedUrl(d.storage_path); window.open(url,"_blank");}catch(e){alert("Download failed: "+e.message);}}
   async function removeDoc(d){if(!confirm("Delete "+d.filename+"?"))return; await deleteDocument(d); await refresh();}
 
@@ -534,8 +750,60 @@ function EstatePanel({state,refresh}){
   );
 }
 
+// ==================== RETIREMENT ====================
+function ExpensePhasesExplainer({state}){
+  const {household, persons, mortgages} = state;
+  const primaryAge = persons[0]?.age || 55;
+  const retireAge = Number(household.retirement_age || 65);
+  const mortEndAge = mortgageEndAgeForPrimary(mortgages, primaryAge);
+  const working = monthlyExpensesForPhase(household, mortgages, 'working');
+  const retiredWithM = monthlyExpensesForPhase(household, mortgages, 'retired_with_mortgage');
+  const retiredNoM = monthlyExpensesForPhase(household, mortgages, 'retired_no_mortgage');
+  const work = Number(household.monthly_expenses_work_related||0);
+  const mort = monthlyMortgagePayment(mortgages);
+  const factor = Number(household.retirement_lifestyle_factor||0.80);
+
+  const phases = [
+    {label:"Working", ageRange:`Now (age ${primaryAge}) → ${retireAge}`, monthly:working, color:"#dc2626"},
+    ...(mortEndAge!==null && mortEndAge > retireAge
+      ? [{label:"Retired, still paying mortgage", ageRange:`${retireAge} → ${mortEndAge}`, monthly:retiredWithM, color:"#f59e0b"}]
+      : []),
+    {label: mortEndAge!==null
+        ? (mortEndAge > retireAge ? "Retired, mortgage paid off" : "Retired (mortgage already paid)")
+        : "Retired",
+      ageRange:`${mortEndAge!==null && mortEndAge>retireAge ? mortEndAge : retireAge} → end of plan`,
+      monthly: mortEndAge===null ? retiredWithM : retiredNoM,
+      color:"#10b981"},
+  ];
+
+  return (
+    <Card title="What happens to your expenses across retirement?">
+      <div className="text-sm text-slate-600 mb-3">
+        Your expenses aren't a single number for life — they shift as work-related costs disappear, the mortgage gets paid off, and you adjust your lifestyle in retirement. Here's the breakdown the planner uses, based on your inputs in the <strong>Household</strong> and <strong>Mortgages</strong> tabs.
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        {phases.map((p,i)=>(
+          <div key={i} className="rounded-lg border border-slate-200 p-3" style={{borderLeftWidth:4, borderLeftColor:p.color}}>
+            <div className="text-xs uppercase tracking-wide text-slate-500">{p.label}</div>
+            <div className="text-[11px] text-slate-400">{p.ageRange}</div>
+            <div className="font-bold text-xl mt-1">{fmt$(p.monthly,0)}<span className="text-xs font-normal text-slate-500">/mo</span></div>
+            <div className="text-[11px] text-slate-500 mt-1">{fmt$(p.monthly*12,0)}/yr</div>
+          </div>
+        ))}
+      </div>
+      <div className="mt-4 text-xs text-slate-600 space-y-1">
+        <div><strong>Why working-years expenses are highest:</strong> they include essential + discretionary + work-related (commute, lunches, work clothes, daycare) + mortgage payment.</div>
+        {mort>0 && <div><strong>When the mortgage ends</strong> (around age {mortEndAge}), your monthly burden drops by <strong>{fmt$(mort,0)}/mo</strong> — that's the single biggest cliff in most household budgets.</div>}
+        {work>0 && <div><strong>When you retire</strong>, work-related costs of <strong>{fmt$(work,0)}/mo</strong> disappear, and your essential + discretionary spending typically drops to about <strong>{Math.round(factor*100)}%</strong> of your working level (less commuting, fewer professional clothes, more home cooking, but possibly higher healthcare and travel — adjust the factor on the Household tab).</div>}
+        {mort===0 && work===0 && (Number(household.monthly_expenses_essential||0)+Number(household.monthly_expenses_discretionary||0))===0 && <div className="text-amber-700">Tip: Fill in your monthly expense buckets on the Household tab (and add a mortgage on the Mortgages tab) to see this breakdown.</div>}
+      </div>
+      <SourceTag src="Industry rule of thumb: retirement spending typically 70–85% of pre-retirement (varies widely); StatsCan Household Spending data" date="2026" jur="Canada" conf="Medium"/>
+    </Card>
+  );
+}
+
 function RetirementEngine({state}){
-  const {household,persons,accounts}=state;
+  const {household,persons,accounts,mortgages}=state;
   const sum=persons.reduce((acc,p)=>{
     const my=accounts.filter(a=>a.person_id===p.id);
     for(const a of my){const bal=Number(a.balance||0),c=Number(a.annual_contribution||0);
@@ -549,6 +817,7 @@ function RetirementEngine({state}){
   const retireAge=Number(household.retirement_age||65);
   const endAge=Number(household.end_age||95);
   const primary=persons[0]||{age:55};
+  const mortEndAge = mortgageEndAgeForPrimary(mortgages, primary.age);
   const cppIncome=persons.reduce((s,p)=>s+cppAnnual(p.cpp_pct_of_max||0,p.cpp_start_age||65),0);
   const oasIncome=persons.reduce((s,p)=>s+oasAnnual(p.years_in_canada||35,p.oas_start_age||65),0);
   const otherPensions=persons.reduce((s,p)=>s+Number(p.other_pension_annual||0),0);
@@ -558,7 +827,12 @@ function RetirementEngine({state}){
   for(let age=primary.age;age<=endAge;age++){
     const yrs=age-primary.age;
     const inflFactor=Math.pow(1+infl,yrs);
-    const yearSpending=Number(household.monthly_expenses||5000)*12*inflFactor;
+    // Phase-aware spending
+    let phaseSpending;
+    if (age < retireAge) phaseSpending = monthlyExpensesForPhase(household, mortgages, 'working')*12;
+    else if (mortEndAge!==null && age < mortEndAge) phaseSpending = monthlyExpensesForPhase(household, mortgages, 'retired_with_mortgage')*12;
+    else phaseSpending = monthlyExpensesForPhase(household, mortgages, mortEndAge===null ? 'retired_with_mortgage' : 'retired_no_mortgage')*12;
+    const yearSpending = phaseSpending * inflFactor;
     const govCpp=persons.every(p=>age>=(p.cpp_start_age||65))?cppIncome*inflFactor:0;
     const govOas=persons.every(p=>age>=(p.oas_start_age||65))?oasIncome*inflFactor:0;
     const govIn=govCpp+govOas+otherPensions*inflFactor;
@@ -578,7 +852,7 @@ function RetirementEngine({state}){
     rows.push({age,phase:"retire",rrsp:Math.round(rrsp),tfsa:Math.round(tfsa),nonReg:Math.round(nonReg),total:Math.round(rrsp+tfsa+nonReg),gov:Math.round(govIn),withdrawal:Math.round(fromRRSP+fromNonReg+fromTFSA),spending:Math.round(yearSpending),shortfall:Math.round(Math.max(0,need)),rrifMin:Math.round(rrifMin)});
   }
   const neverDepletes=cumulativeShortfall===0;
-  const grossNetAtRetire=cppIncome+oasIncome+otherPensions+(Number(household.monthly_expenses||0)*12)*0.5;
+  const grossNetAtRetire=cppIncome+oasIncome+otherPensions+(Number(household.monthly_expenses_essential||0)*12)*0.5;
   const clawback=oasClawback(grossNetAtRetire,oasIncome);
   return(
     <div className="space-y-4">
@@ -588,21 +862,29 @@ function RetirementEngine({state}){
         <Stat label="Est. OAS clawback" value={fmt$(clawback)} tone={clawback>0?"warn":"good"}/>
         <Stat label="Verdict" value={neverDepletes?"✓ On track":"⚠ Shortfall"} sub={neverDepletes?"Plan to "+endAge:"Gap "+fmt$(cumulativeShortfall)} tone={neverDepletes?"good":"bad"}/>
       </div>
-      <Card title="Portfolio projection by year (nominal $)">
+
+      <ExpensePhasesExplainer state={state}/>
+
+      <Card title="Portfolio + spending projection (nominal $)">
         {rows.length===0?<div className="text-sm text-slate-500">Set ages and accounts first.</div>:
-        <div className="h-72"><ResponsiveContainer width="100%" height="100%">
+        <div className="h-80"><ResponsiveContainer width="100%" height="100%">
           <AreaChart data={rows}>
             <CartesianGrid strokeDasharray="3 3"/>
             <XAxis dataKey="age"/>
-            <YAxis tickFormatter={v=>"$"+(v/1000).toFixed(0)+"K"}/>
+            <YAxis yAxisId="left" tickFormatter={v=>"$"+(v/1000).toFixed(0)+"K"}/>
+            <YAxis yAxisId="right" orientation="right" tickFormatter={v=>"$"+(v/1000).toFixed(0)+"K"}/>
             <Tooltip formatter={v=>fmt$(v)}/><Legend/>
-            <Area type="monotone" dataKey="rrsp" stackId="1" stroke="#dc2626" fill="#fecaca" name="Tax-deferred"/>
-            <Area type="monotone" dataKey="nonReg" stackId="1" stroke="#65a30d" fill="#d9f99d" name="Non-Reg"/>
-            <Area type="monotone" dataKey="tfsa" stackId="1" stroke="#0891b2" fill="#a5f3fc" name="TFSA + FHSA"/>
-            <ReferenceLine x={retireAge} stroke="#475569" strokeDasharray="3 3" label={{value:"Retire",position:"top",fill:"#475569",fontSize:11}}/>
+            <Area yAxisId="left" type="monotone" dataKey="rrsp" stackId="1" stroke="#dc2626" fill="#fecaca" name="Tax-deferred"/>
+            <Area yAxisId="left" type="monotone" dataKey="nonReg" stackId="1" stroke="#65a30d" fill="#d9f99d" name="Non-Reg"/>
+            <Area yAxisId="left" type="monotone" dataKey="tfsa" stackId="1" stroke="#0891b2" fill="#a5f3fc" name="TFSA + FHSA"/>
+            <Line yAxisId="right" type="stepAfter" dataKey="spending" stroke="#7c2d12" strokeWidth={2} dot={false} name="Annual spending"/>
+            <ReferenceLine yAxisId="left" x={retireAge} stroke="#475569" strokeDasharray="3 3" label={{value:"Retire",position:"top",fill:"#475569",fontSize:11}}/>
+            {mortEndAge!==null && mortEndAge>=primary.age && mortEndAge<=endAge && <ReferenceLine yAxisId="left" x={mortEndAge} stroke="#10b981" strokeDasharray="3 3" label={{value:"Mortgage paid",position:"top",fill:"#10b981",fontSize:11}}/>}
           </AreaChart>
         </ResponsiveContainer></div>}
+        <div className="text-[11px] text-slate-500 mt-2">Spending line steps down at retirement (work-related expenses disappear, lifestyle factor applied) and again when the mortgage finishes.</div>
       </Card>
+
       <Card title="Year-by-year drawdown">
         <div className="overflow-x-auto"><table className="w-full text-xs">
           <thead className="bg-slate-100 text-slate-600"><tr>{["Age","Phase","Spend","Gov't","RRIF min","Withdrawal","Tax-def","TFSA","Non-Reg","Total","Shortfall"].map(h=><th key={h} className="text-right px-2 py-1.5 first:text-left">{h}</th>)}</tr></thead>
@@ -691,10 +973,11 @@ function AppShell({session}){
     {id:"dashboard",icon:"📊",label:"Dashboard"},
     {id:"profile",icon:"👫",label:"Household"},
     {id:"accounts",icon:"💼",label:"Accounts"},
+    {id:"mortgages",icon:"🏠",label:"Mortgages"},
     {id:"retire",icon:"🏖️",label:"Retirement"},
-    {id:"tax",icon:"🧾",label:"Tax Centre"},
-    {id:"estate",icon:"📜",label:"Estate & Docs"},
-    {id:"coach",icon:"💬",label:"AI Coach"},
+    {id:"tax",icon:"🧾",label:"Tax"},
+    {id:"estate",icon:"📜",label:"Estate"},
+    {id:"coach",icon:"💬",label:"Coach"},
     {id:"sources",icon:"📚",label:"Sources"},
   ];
   async function signOut(){await sb.auth.signOut();}
@@ -721,6 +1004,7 @@ function AppShell({session}){
         {view==="dashboard"&&<Dashboard state={state} setView={setView}/>}
         {view==="profile"  &&<HouseholdPanel state={state} refresh={refresh}/>}
         {view==="accounts" &&<AccountsPanel state={state} refresh={refresh}/>}
+        {view==="mortgages"&&<MortgagesPanel state={state} refresh={refresh}/>}
         {view==="retire"   &&<RetirementEngine state={state}/>}
         {view==="tax"      &&<TaxCentre state={state}/>}
         {view==="estate"   &&<EstatePanel state={state} refresh={refresh}/>}
