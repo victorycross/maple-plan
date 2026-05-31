@@ -950,7 +950,72 @@ function TaxCentre({state}){
   );
 }
 
-function AICoach(){return(<Card title="AI financial coach (demo)" right={<Pill tone="amber">Cited canned responses</Pill>}><div className="text-sm text-slate-600">In production this wires to retrieval-augmented Claude API calls over indexed CRA / Service Canada / FCAC documents, with per-chunk source attribution. For now, the Retirement and Tax Centre tabs answer numeric questions interactively.</div></Card>);}
+function AICoach({state}){
+  const [messages,setMessages]=useState([
+    {role:"assistant", content:"Hi — I'm your educational Canadian financial coach. I see your household profile (province, ages, income, accounts, mortgages, retirement plan), so I can give you specific answers using your numbers. Try one of the suggested questions or ask anything about Canadian personal finance."}
+  ]);
+  const [input,setInput]=useState("");
+  const [busy,setBusy]=useState(false);
+  const [err,setErr]=useState("");
+  const scrollRef=useRef(null);
+  useEffect(()=>{ if(scrollRef.current) scrollRef.current.scrollTop=scrollRef.current.scrollHeight; },[messages,busy]);
+
+  async function send(text){
+    const content=(text??input).trim();
+    if(!content||busy) return;
+    setErr("");
+    const next=[...messages,{role:"user",content}];
+    setMessages(next); setInput(""); setBusy(true);
+    try {
+      // Only send user/assistant turns (skip the seed greeting since it's part of system tone)
+      const apiMessages=next.filter((m,i)=> !(i===0 && m.role==="assistant"));
+      const {data,error}=await sb.functions.invoke("coach-chat",{
+        body:{ messages:apiMessages },
+      });
+      if(error) throw new Error(error.message||String(error));
+      if(data?.error) throw new Error(data.error+(data.detail?" — "+JSON.stringify(data.detail):""));
+      setMessages(m=>[...m,{role:"assistant",content:data.reply||"(empty reply)", usage:data.usage, model:data.model}]);
+    } catch(e){ setErr(e.message||String(e)); }
+    finally{ setBusy(false); }
+  }
+
+  const suggestions=[
+    "Given my profile, should I take CPP at 60, 65, or 70?",
+    "What's the smartest withdrawal order for my accounts in retirement?",
+    "How does the OAS clawback affect me?",
+    "Should I prepay my mortgage or contribute more to my RRSP?",
+    "Explain the widow's penalty and how to plan around it",
+  ];
+
+  return (
+    <Card title="AI financial coach" right={<Pill tone="green">Live · Claude Sonnet 4.6</Pill>}>
+      <div ref={scrollRef} className="h-80 overflow-y-auto bg-slate-50 rounded p-3 space-y-2 text-sm">
+        {messages.map((m,i)=>(
+          <div key={i} className={"flex "+(m.role==="user"?"justify-end":"justify-start")}>
+            <div className={"max-w-[85%] rounded-lg px-3 py-2 whitespace-pre-wrap "+(m.role==="user"?"bg-red-600 text-white":"bg-white border border-slate-200")}>
+              {m.content}
+              {m.usage && <div className="text-[10px] mt-1 opacity-60 citation">Tokens in {m.usage.input_tokens} · out {m.usage.output_tokens}</div>}
+            </div>
+          </div>
+        ))}
+        {busy && <div className="flex justify-start"><div className="bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-500 flex items-center gap-2"><Spinner/> Coach is thinking…</div></div>}
+      </div>
+      {err && <div className="mt-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1.5">{err}</div>}
+      <div className="mt-3 flex flex-wrap gap-2">
+        {suggestions.map(s=> <button key={s} onClick={()=>send(s)} disabled={busy} className="text-xs px-2 py-1 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 rounded text-left">{s}</button>)}
+      </div>
+      <form onSubmit={e=>{e.preventDefault();send();}} className="mt-2 flex gap-2">
+        <input value={input} onChange={e=>setInput(e.target.value)} disabled={busy}
+          placeholder="Ask about RRSP, CPP, OAS, RRIF, mortgages, tax brackets…"
+          className="flex-1 border border-slate-300 rounded px-3 py-2 text-sm focus:ring-red-500 focus:border-red-500 disabled:opacity-50"/>
+        <button type="submit" disabled={busy||!input.trim()} className="bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white px-4 py-2 rounded text-sm font-medium">{busy?<Spinner/>:"Send"}</button>
+      </form>
+      <div className="text-[10px] text-slate-400 mt-2">
+        Your profile (province, ages, income, accounts, mortgages) is sent server-side to Anthropic so answers are personalized. Educational use only — not regulated financial advice.
+      </div>
+    </Card>
+  );
+}
 
 function SourcesPanel(){
   const items=[["Canada Revenue Agency","https://www.canada.ca/en/revenue-agency.html"],["Service Canada","https://www.canada.ca/en/services/benefits.html"],["FCAC","https://www.canada.ca/en/financial-consumer-agency.html"],["StatsCan","https://www.statcan.gc.ca"],["OSFI","https://www.osfi-bsif.gc.ca"],["Canadian Securities Administrators","https://www.securities-administrators.ca"],["FSRA (Ontario pensions)","https://www.fsrao.ca"],["MPAC (Ontario assessment)","https://www.mpac.ca"]];
@@ -1008,7 +1073,7 @@ function AppShell({session}){
         {view==="retire"   &&<RetirementEngine state={state}/>}
         {view==="tax"      &&<TaxCentre state={state}/>}
         {view==="estate"   &&<EstatePanel state={state} refresh={refresh}/>}
-        {view==="coach"    &&<AICoach/>}
+        {view==="coach"    &&<AICoach state={state}/>}
         {view==="sources"  &&<SourcesPanel/>}
       </main>
       <footer className="max-w-7xl mx-auto px-4 py-6 text-xs text-slate-500 border-t border-slate-200 mt-6">
