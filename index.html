@@ -1308,16 +1308,30 @@ function CashFlowPanel({state}){
   const [search, setSearch] = useState("");
 
   useEffect(()=>{
-    setLoading(true); setErr("");
-    sb.from("transactions").select("date, category, amount, is_transfer")
-      .eq("household_id", household.id)
-      .order("date", {ascending:false})
-      .limit(50000)
-      .then(({data, error})=>{
-        if (error) setErr(error.message);
-        else setTxns(data||[]);
-        setLoading(false);
-      });
+    let cancelled = false;
+    (async ()=>{
+      setLoading(true); setErr(""); setTxns([]);
+      try {
+        // Supabase REST has a server-side row cap (~1000). Paginate via .range.
+        const PAGE = 1000; let from = 0; const all = [];
+        for (;;) {
+          const {data, error} = await sb.from("transactions")
+            .select("date, category, amount, is_transfer")
+            .eq("household_id", household.id)
+            .order("date", {ascending:false})
+            .range(from, from + PAGE - 1);
+          if (error) throw error;
+          if (!data || data.length === 0) break;
+          all.push(...data);
+          if (data.length < PAGE) break;
+          from += PAGE;
+          if (from > 200000) break; // safety guard
+        }
+        if (!cancelled) setTxns(all);
+      } catch(e){ if (!cancelled) setErr(e.message||String(e)); }
+      finally { if (!cancelled) setLoading(false); }
+    })();
+    return ()=>{ cancelled = true; };
   }, [household.id]);
 
   const today = new Date();
