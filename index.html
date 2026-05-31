@@ -970,14 +970,15 @@ function AICoach({state}){
       // Only send user/assistant turns (skip the seed greeting since it's part of system tone)
       const apiMessages=next.filter((m,i)=> !(i===0 && m.role==="assistant"));
       const {data,error}=await sb.functions.invoke("coach-chat",{
-        body:{ messages:apiMessages },
+        body:{ messages:apiMessages, max_tokens: 4096 },
       });
       if(error) throw new Error(error.message||String(error));
       if(data?.error) throw new Error(data.error+(data.detail?" — "+JSON.stringify(data.detail):""));
-      setMessages(m=>[...m,{role:"assistant",content:data.reply||"(empty reply)", usage:data.usage, model:data.model}]);
+      setMessages(m=>[...m,{role:"assistant",content:data.reply||"(empty reply)", usage:data.usage, model:data.model, stop_reason:data.stop_reason}]);
     } catch(e){ setErr(e.message||String(e)); }
     finally{ setBusy(false); }
   }
+  function continueLast(){ send("Please continue your previous answer from where it was cut off. Don't repeat what you already wrote."); }
 
   const suggestions=[
     "Given my profile, should I take CPP at 60, 65, or 70?",
@@ -990,14 +991,21 @@ function AICoach({state}){
   return (
     <Card title="AI financial coach" right={<Pill tone="green">Live · Claude Sonnet 4.6</Pill>}>
       <div ref={scrollRef} className="h-80 overflow-y-auto bg-slate-50 rounded p-3 space-y-2 text-sm">
-        {messages.map((m,i)=>(
-          <div key={i} className={"flex "+(m.role==="user"?"justify-end":"justify-start")}>
-            <div className={"max-w-[85%] rounded-lg px-3 py-2 whitespace-pre-wrap "+(m.role==="user"?"bg-red-600 text-white":"bg-white border border-slate-200")}>
-              {m.content}
-              {m.usage && <div className="text-[10px] mt-1 opacity-60 citation">Tokens in {m.usage.input_tokens} · out {m.usage.output_tokens}</div>}
+        {messages.map((m,i)=>{
+          const truncated = m.stop_reason==="max_tokens";
+          const isLast = i===messages.length-1 && m.role==="assistant";
+          return (
+            <div key={i} className={"flex "+(m.role==="user"?"justify-end":"justify-start")}>
+              <div className={"max-w-[85%] rounded-lg px-3 py-2 whitespace-pre-wrap "+(m.role==="user"?"bg-red-600 text-white":"bg-white border border-slate-200")}>
+                {m.content}
+                {truncated && <div className="mt-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                  ⚠ Response was cut off at the token limit. {isLast && <button onClick={continueLast} disabled={busy} className="ml-1 underline font-medium hover:text-amber-900">Continue →</button>}
+                </div>}
+                {m.usage && <div className="text-[10px] mt-1 opacity-60 citation">Tokens in {m.usage.input_tokens} · out {m.usage.output_tokens}{m.stop_reason ? " · stop: "+m.stop_reason : ""}</div>}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
         {busy && <div className="flex justify-start"><div className="bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-500 flex items-center gap-2"><Spinner/> Coach is thinking…</div></div>}
       </div>
       {err && <div className="mt-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1.5">{err}</div>}
